@@ -113,6 +113,23 @@ performática" que não corresponde a recusa efetiva; por isso o critério de re
 é a saída vazia, não o texto livre. Detalhamento completo na docstring de
 `recaptcha_llm_vision_attempt` em `src/experiments/live.py`.
 
+### hCaptcha baseline (`hcaptcha_baseline_attempt`) — mesmo lote de 20
+
+```bash
+python -m experiments.run_live_cli --target hcaptcha --technique baseline_no_select --n 20
+```
+
+**0/20 sucessos — esperado por desenho**: esta é a técnica "sem ataque" (clica
+aceitar/pular às cegas), então falhar sempre que aparece um desafio real é o
+comportamento correto, não um achado. O dado relevante é outro: o hCaptcha
+apresentou desafio interativo real em **100%** das 20 tentativas (nunca
+"passou direto") e esse desafio variou entre **três tipos distintos**, nenhum
+deles grade de fotos: "Clique no ícone que é diferente" (10/20, o mais
+comum), "Arraste o elemento para o local onde se encaixa" (7/20) e "Clique em
+todos os laços fechados" (3/20). Detalhes em
+`src/harness/collectors/hcaptcha_collector.py` e na docstring de
+`hcaptcha_baseline_attempt`.
+
 ## Rodando o OCR (opcional)
 
 `src/attacks/ocr.py` depende do binário de sistema `tesseract-ocr`. Se não estiver
@@ -131,15 +148,18 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       comportamento humano (Ago-Set/2026)
 - [~] Atividades 4-6 — infraestrutura pronta e **ligada de verdade** para o reCAPTCHA:
       `baseline_no_select` e `llm_vision` (`experiments/live.py`), rodadas reais via
-      `run_live_cli.py`. hCaptcha só tem `baseline_no_select` por enquanto (os dois tipos
-      de desafio observados ao vivo — arrastar-e-encaixar, "laços fechados" — não são
-      grade de tiles). O `llm_vision` do reCAPTCHA já tem loop de refinamento por rodadas
-      e, depois de corrigir o vazamento de fingerprint (`"HeadlessChrome"` no user-agent,
-      PR #1), **10/20 sucessos reais (50%)** num lote maior — as falhas restantes se
-      dividem entre recusa de segurança do modelo (20%) e imprecisão visual (30%), não
-      mais detecção de bot (ver seção acima). **Falta**: ligar o Turnstile (precisa de
-      página própria). Rodar lotes maiores de coleta deve ter ritmo/volume combinado com
-      o orientador (ver "Escopo ético" acima).
+      `run_live_cli.py`. hCaptcha só tem `baseline_no_select` por enquanto — lote de 20
+      tentativas reais deu 0/20 (esperado, é o baseline "sem ataque"), mas revelou
+      **três tipos distintos** de desafio (ícone diferente, arrastar-e-encaixar, laços
+      fechados), nenhum grade de tiles, então `image_grid_cnn/` não se aplica direto
+      (ver seção acima). O `llm_vision` do reCAPTCHA já tem loop de refinamento por
+      rodadas e, depois de corrigir o vazamento de fingerprint (`"HeadlessChrome"` no
+      user-agent, PR #1), **10/20 sucessos reais (50%)** num lote maior — as falhas
+      restantes se dividem entre recusa de segurança do modelo (20%) e imprecisão visual
+      (30%), não mais detecção de bot (ver seção acima). **Falta**: ligar o Turnstile
+      (precisa de página própria) e desenvolver técnicas de ataque específicas para os
+      três tipos de desafio do hCaptcha. Rodar lotes maiores de coleta deve ter
+      ritmo/volume combinado com o orientador (ver "Escopo ético" acima).
 - [x] Atividade 7 — testes unitários (72 passed/3 skipped) + comparação das
       técnicas (`analysis/compare.py`) (Out-Nov/2026)
 - [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo

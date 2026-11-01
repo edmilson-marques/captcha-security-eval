@@ -15,15 +15,36 @@ Dentro do iframe do checkbox, o elemento clicável tem `id="checkbox"`.
 **Achado relevante para a Atividade 2 (desenho dos módulos de ataque)**: ao
 contrário do pressuposto inicial de "grade de imagens" (que vale para o
 reCAPTCHA v2 — ver `recaptcha_collector.py`), o desafio servido por este
-sitekey de demo do hCaptcha nas duas coletas de teste (2026-11-01) foi
-consistentemente um **quebra-cabeça de arrastar-e-encaixar** ("Arraste o
-elemento para o local onde se encaixa"), renderizado em `<canvas>`, não uma
-grade de imagens `<img>` clicáveis. Isso significa que o classificador de
-`src/attacks/image_grid_cnn/` (desenhado para seleção em grade) não se aplica
-diretamente a este desafio — ele pede alinhamento geométrico/espacial (ex.
-correlação cruzada de template entre a peça e o recorte no fundo), uma
-técnica de ataque distinta a ser desenvolvida separadamente. Documentar este
-contraste é, em si, um resultado relevante do estudo comparativo.
+sitekey de demo do hCaptcha não é consistentemente um único tipo. Um lote de
+20 tentativas reais via `experiments.live.hcaptcha_baseline_attempt`
+(2026-11-01) mostrou **três tipos distintos** de desafio, todos renderizados
+fora do padrão `<img>` em grade clicável do reCAPTCHA v2:
+
+- **"Clique no ícone que é diferente"** (10/20 — o mais comum): um pequeno
+  conjunto de ícones onde um destoa visualmente dos demais; interação é um
+  clique único no ícone diferente, não seleção múltipla nem grade.
+- **"Arraste o elemento para o local onde se encaixa"** (7/20): quebra-cabeça
+  de arrastar-e-encaixar renderizado em `<canvas>` — pede alinhamento
+  geométrico/espacial (ex. correlação cruzada de template entre a peça e o
+  recorte no fundo).
+- **"Clique em todos os laços fechados"** (3/20): seleção de formas por
+  critério geométrico (laço fechado vs. aberto), não por categoria semântica
+  de objeto.
+
+Nenhum dos três mapeia diretamente para `src/attacks/image_grid_cnn/`
+(desenhado para seleção em grade de fotos por categoria semântica) — cada um
+pede uma técnica de ataque distinta (classificação de anomalia visual entre
+poucos ícones; correlação de template geométrico; detecção de topologia de
+forma). Documentar essa diversidade de desafio é, em si, um resultado
+relevante do estudo comparativo: o hCaptcha não tem um único "formato" de
+desafio visual como o reCAPTCHA v2 tem (grade de fotos).
+
+Também relevante: nas 20 tentativas, o hCaptcha apresentou desafio
+interativo real em **100%** dos casos (nunca `challenge_not_presented`) para
+o fingerprint testado (Chrome headless com user-agent de desktop — ver
+`harness/browser.py`) — diferente do que se poderia esperar se o motor de
+risco julgasse esse tráfego como baixo-risco o suficiente para pular o
+desafio.
 """
 
 from __future__ import annotations

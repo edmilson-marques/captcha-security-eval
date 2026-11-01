@@ -317,6 +317,20 @@ def hcaptcha_baseline_attempt(demo_url: str = HCAPTCHA_DEMO_URL, headless: bool 
     `#checkbox` expõe `aria-checked="true"` só quando aceito. O botão de
     confirmação tem a classe estável `.button-submit` (o texto varia entre
     "Pular"/"Confirmar" conforme o tipo de desafio e idioma).
+
+    **Lote de 20 tentativas reais em 2026-11-01** (já com o user-agent de
+    desktop corrigido — ver `harness/browser.py`): **0/20 sucessos**, como
+    esperado por desenho — esta função é o baseline "sem ataque" (clica
+    aceitar/pular às cegas, nunca tenta de fato resolver o desafio), então
+    falhar sempre que um desafio real é exibido é o comportamento correto, não
+    um bug. O dado relevante aqui não é a taxa (0% é o valor de referência
+    esperado), e sim que o hCaptcha apresentou desafio interativo real em
+    **100%** das 20 tentativas (nunca `challenge_not_presented`) e que esse
+    desafio variou entre **três tipos distintos**: "Clique no ícone que é
+    diferente" (10/20), "Arraste o elemento para o local onde se encaixa"
+    (7/20) e "Clique em todos os laços fechados" (3/20) — ver
+    `harness/collectors/hcaptcha_collector.py` para a discussão de por que
+    nenhum mapeia diretamente para o `image_grid_cnn/` existente.
     """
     driver = build_driver(BrowserConfig(headless=headless))
     try:
