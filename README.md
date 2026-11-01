@@ -189,11 +189,21 @@ arrastar-e-encaixar. Achado no processo: uma recusa do modelo pode fazer
 grade) — corrigido para não derrubar a votação. Com **0/23** cliques-sobre-
 canvas bem-sucedidos na sessão inteira (antes e depois do consenso), a causa
 provavelmente não é só ruído pontual do modelo (votação deveria destravar
-pelo menos alguns casos, como fez na grade) — fica em aberto se é um limite
-de precisão visual sistemático do modelo para esses dois tipos ou uma
-exigência de interação mais estrita do hCaptcha que só instrumentação a
-nível de evento JS no iframe do desafio confirmaria. Detalhamento completo
-na docstring de `hcaptcha_llm_vision_attempt`.
+pelo menos alguns casos, como fez na grade).
+
+**Instrumentação a nível de evento JS descarta bug de execução.** Injetei
+listeners (`pointerdown`/`mousedown`/`pointerup`/`mouseup`/`click`) direto no
+`<canvas>` do desafio real e cliquei em 3 pontos conhecidos via
+`click_canvas_point`: sequência completa de eventos, **100% `isTrusted=true`**
+e coordenada recebida idêntica, pixel a pixel, ao ponto pedido nos 3 casos —
+sem desvio, sem erro de escala. O mecanismo de clique está correto; não há
+bug de coordenada nem rejeição de evento a explicar o 0/23. A causa
+remanescente é, com alta confiança agora, **precisão visual do próprio
+modelo** para esses dois tipos específicos de desafio — sistemática o
+bastante pra não ceder nem a self-consistency. Não testado: se um modelo mais
+forte (`gpt-6-astra`) ou outro pré-processamento de imagem mudaria isso.
+Detalhamento completo na docstring de `hcaptcha_llm_vision_attempt` e de
+`harness/humanized_actions.py`.
 
 ## Rodando o OCR (opcional)
 
@@ -224,11 +234,14 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       próprio — puxado quase todo pelo arrastar-e-encaixar (9/15 nas duas rodadas, ~60%);
       clique em ponto sobre canvas (ícone diferente + laços fechados) ficou em **0/23**
       mesmo depois de tentar self-consistency por consenso espacial (mesma técnica que
-      funcionou na grade do reCAPTCHA) — não subiu, ver seção acima para a análise.
-      **Falta**: ligar o Turnstile (precisa de página própria) e investigar o
-      clique-sobre-canvas a nível de evento JS para distinguir limite de precisão do
-      modelo de exigência de interação do hCaptcha. Rodar lotes maiores de coleta deve
-      ter ritmo/volume combinado com o orientador (ver "Escopo ético" acima).
+      funcionou na grade do reCAPTCHA). Instrumentação a nível de evento JS (listeners no
+      `<canvas>` real) descartou bug de execução — 100% `isTrusted=true`, coordenada
+      exata em todos os pontos testados — então a causa provável é um limite de precisão
+      visual do próprio modelo para esses dois tipos, não um bug de clique. **Falta**:
+      ligar o Turnstile (precisa de página própria) e, se fizer sentido, testar um modelo
+      mais forte ou outro pré-processamento de imagem para o clique-sobre-canvas. Rodar
+      lotes maiores de coleta deve ter ritmo/volume combinado com o orientador (ver
+      "Escopo ético" acima).
 - [x] Atividade 7 — testes unitários (72 passed/3 skipped) + comparação das
       técnicas (`analysis/compare.py`) (Out-Nov/2026)
 - [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo
