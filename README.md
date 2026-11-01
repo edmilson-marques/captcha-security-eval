@@ -88,8 +88,20 @@ mecanismo do loop funciona certo (2 de 3 convergiram corretamente na 2ª rodada)
 em 1 das 3 o modelo (`gpt-6.1-terra`) **recusou responder por segurança**
 (`"Não posso ajudar a resolver ou contornar um CAPTCHA"`) — uma barreira de moderação de
 conteúdo que um classificador treinado do zero (`image_grid_cnn/`) não teria. Achado
-relevante pra comparação entre técnicas do estudo. Detalhamento completo na docstring
-de `recaptcha_llm_vision_attempt` em `src/experiments/live.py`.
+relevante pra comparação entre técnicas do estudo.
+
+**Achado maior: detecção de bot via user-agent mascarava o verdadeiro desempenho.**
+Mais 5 tentativas (após só remover ruído de interface do prompt, sem tocar na moldura
+da tarefa) deram de novo 0/5 — mas com o loop convergindo corretamente mesmo em casos
+que não eram recusa, o que levantou a suspeita de bloqueio por detecção de automação
+*antes* de qualquer avaliação da resposta. Confirmado: `navigator.userAgent` do Chrome
+headless continha literalmente `"HeadlessChrome"` (achado e corrigido em
+`src/harness/browser.py` — ver PR #1). **Depois da correção, 5 novas tentativas reais
+deram 2/5 sucessos** — das 3 falhas restantes, 2 foram recusas de segurança do modelo e
+1 foi imprecisão visual real (sem recusa, loop convergiu certo). Ou seja, com o sinal de
+bot removido, a causa de falha passou a ser só o que interessa à comparação do estudo
+(recusa de segurança vs. imprecisão visual), não mais um artefato do harness. Detalhamento
+completo na docstring de `recaptcha_llm_vision_attempt` em `src/experiments/live.py`.
 
 ## Rodando o OCR (opcional)
 
@@ -112,11 +124,12 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       `run_live_cli.py`. hCaptcha só tem `baseline_no_select` por enquanto (os dois tipos
       de desafio observados ao vivo — arrastar-e-encaixar, "laços fechados" — não são
       grade de tiles). O `llm_vision` do reCAPTCHA já tem loop de refinamento por rodadas
-      (converge corretamente, 0/7 sucessos reais até agora entre as duas versões — causa
-      principal migrou de limitação arquitetural para recusa de segurança do modelo e
-      imprecisão visual residual, ver seção acima). **Falta**: ligar o Turnstile (precisa
-      de página própria). Rodar lotes maiores de coleta deve ter ritmo/volume combinado
-      com o orientador (ver "Escopo ético" acima).
+      e, depois de corrigir o vazamento de fingerprint (`"HeadlessChrome"` no user-agent,
+      PR #1), **2/5 sucessos reais** na última rodada — as 3 falhas restantes se dividem
+      entre recusa de segurança do modelo e imprecisão visual, não mais detecção de bot
+      (ver seção acima). **Falta**: ligar o Turnstile (precisa de página própria). Rodar
+      lotes maiores de coleta deve ter ritmo/volume combinado com o orientador (ver
+      "Escopo ético" acima).
 - [x] Atividade 7 — testes unitários (72 passed/3 skipped) + comparação das
       técnicas (`analysis/compare.py`) (Out-Nov/2026)
 - [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo
