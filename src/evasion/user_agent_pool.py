@@ -48,6 +48,13 @@ DEFAULT_USER_AGENTS: list[str] = [
     ),
 ]
 
+# Subconjunto só de desktop — os 5 primeiros itens de DEFAULT_USER_AGENTS.
+# Importante escolher a partir daqui (não de DEFAULT_USER_AGENTS) sempre que
+# o resto do fingerprint (ex. tamanho de janela) for fixo e de desktop: um
+# user-agent mobile (Android/iOS) combinado com uma janela 1366x900 é, ele
+# mesmo, uma inconsistência detectável — pior que não randomizar nada.
+DESKTOP_USER_AGENTS: list[str] = DEFAULT_USER_AGENTS[:5]
+
 _VIEWPORTS: list[tuple[int, int]] = [
     (1366, 768),
     (1920, 1080),

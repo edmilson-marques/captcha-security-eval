@@ -9,6 +9,7 @@ from evasion.human_behavior import bezier_mouse_path, human_delay
 from evasion.proxy_rotation import ProxyRotator
 from evasion.user_agent_pool import (
     DEFAULT_USER_AGENTS,
+    DESKTOP_USER_AGENTS,
     random_fingerprint_profile,
     random_user_agent,
 )
@@ -87,6 +88,15 @@ def test_random_fingerprint_profile_shape():
 def test_random_fingerprint_profile_empty_pool_raises():
     with pytest.raises(ValueError):
         random_fingerprint_profile([])
+
+
+def test_desktop_user_agents_excludes_mobile_entries():
+    assert len(DESKTOP_USER_AGENTS) > 0
+    assert len(DESKTOP_USER_AGENTS) < len(DEFAULT_USER_AGENTS)
+    for ua in DESKTOP_USER_AGENTS:
+        assert "Mobile" not in ua
+        assert "Android" not in ua
+        assert "iPhone" not in ua
 
 
 # --------------------------------------------------------------------------
