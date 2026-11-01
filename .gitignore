@@ -10,6 +10,7 @@ data/raw/**/*
 !data/raw/**/.gitkeep
 data/results/**/*
 !data/results/**/.gitkeep
+data/report/
 
 # Checkpoints de modelo
 *.pt
