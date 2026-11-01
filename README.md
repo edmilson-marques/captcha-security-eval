@@ -68,6 +68,20 @@ custo real **US$0,0011 por chamada**. Os testes automatizados continuam usando u
 mockado (não fazem chamada paga a cada execução da suíte) — a validação ao vivo foi
 manual, ver docstring do módulo.
 
+### Técnica ligada ao runner (`recaptcha_llm_vision_attempt`)
+
+```bash
+python -m experiments.run_live_cli --target recaptcha --technique llm_vision --n 1
+```
+
+**Resultado real medido em 2026-11-01 (4 tentativas): 0/4 sucessos.** Achado
+documentado, não bug: 3 de 4 caíram em grades 3x3 "dinâmicas" (o reCAPTCHA troca o
+tile por uma foto nova ao ser clicado — a implementação atual só faz uma passada,
+então não vence esse tipo por design); a 4ª foi uma grade 4x4 estática onde o
+próprio modelo super-segmentou (`[8,9,12,13]` quando só `9,13` tinham a moto).
+Ver docstring de `recaptcha_llm_vision_attempt` em `src/experiments/live.py` para o
+detalhamento e a melhoria de próximo passo (loop de refinamento iterativo).
+
 ## Rodando o OCR (opcional)
 
 `src/attacks/ocr.py` depende do binário de sistema `tesseract-ocr`. Se não estiver
@@ -84,15 +98,15 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       probe comportamental do Turnstile, solver de visão via LLM (Ago-Set/2026)
 - [x] Atividade 3 — técnicas de evasão: proxy, user-agent/fingerprint, cookies,
       comportamento humano (Ago-Set/2026)
-- [~] Atividades 4-6 — **infraestrutura pronta** (`experiments/runner.py` +
-      `experiments/metrics.py`, testável por injeção de dependência, sem rede).
-      **Falta**: ligar um `attempt_fn` de verdade por (alvo, técnica) — isto é,
-      abrir o navegador real contra a demo, aplicar a técnica/evasão e
-      interpretar o resultado — e então rodar os lotes de coleta em si contra
-      Google/hCaptcha/Cloudflare. Isso é trabalho exploratório ao vivo (a
-      estrutura do DOM de cada desafio só se confirma inspecionando a página
-      de verdade) e deve ser feito com ritmo/volume combinado com o orientador
-      (ver "Escopo ético" acima) — não foi automatizado sem supervisão.
+- [~] Atividades 4-6 — infraestrutura pronta e **ligada de verdade** para o reCAPTCHA:
+      `baseline_no_select` e `llm_vision` (`experiments/live.py`), rodadas reais via
+      `run_live_cli.py`. hCaptcha só tem `baseline_no_select` por enquanto (os dois tipos
+      de desafio observados ao vivo — arrastar-e-encaixar, "laços fechados" — não são
+      grade de tiles). **Falta**: loop de refinamento iterativo do reCAPTCHA para grades
+      3x3 dinâmicas (achado real: 0/4 sucessos do `llm_vision` até agora, 3 por essa
+      limitação — ver seção acima), e ligar o Turnstile (precisa de página própria).
+      Rodar lotes maiores de coleta deve ter ritmo/volume combinado com o orientador
+      (ver "Escopo ético" acima).
 - [x] Atividade 7 — testes unitários (72 passed/3 skipped) + comparação das
       técnicas (`analysis/compare.py`) (Out-Nov/2026)
 - [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo
