@@ -5,11 +5,12 @@ Cada amostra vira uma pasta `data/raw/<alvo>/<timestamp>/` contendo:
   - page.html       (HTML renderizado no momento da captura)
   - metadata.json   (timestamp, URL, alvo, rótulo humano opcional)
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data" / "raw"
@@ -40,7 +41,7 @@ def save_sample(
     extra: dict | None = None,
 ) -> Path:
     """Grava uma amostra bruta coletada e retorna o diretório criado."""
-    collected_at = datetime.now(timezone.utc)
+    collected_at = datetime.now(UTC)
     sample_dir = _sample_dir(target, collected_at)
 
     (sample_dir / "challenge.png").write_bytes(screenshot_png)

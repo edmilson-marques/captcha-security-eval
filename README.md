@@ -53,10 +53,21 @@ python -m harness.collect_cli --target turnstile --url https://<sua-pagina-de-te
 
 Cada amostra é salva em `data/raw/<alvo>/<timestamp>/` (screenshot, HTML e metadados).
 
+## Rodando o OCR (opcional)
+
+`src/attacks/ocr.py` depende do binário de sistema `tesseract-ocr`. Se não estiver
+instalado, `tests/test_ocr.py` é pulado automaticamente; para rodar de verdade:
+
+```bash
+sudo apt install -y tesseract-ocr tesseract-ocr-por
+```
+
 ## Status
 
 - [x] Atividade 1 — ambiente de testes + coletores (Ago/2026)
-- [ ] Atividade 2 — módulos de ataque (Ago-Set/2026)
+- [x] Atividade 2 — módulos de ataque: CV clássica, OCR, CNN de grade de imagem
+      (Ago-Set/2026). Falta apenas `turnstile_behavioral.py`, que depende do
+      runner de experimentos (Atividade 6).
 - [ ] Atividade 3 — técnicas de evasão (Ago-Set/2026)
 - [ ] Atividades 4-6 — execução dos experimentos por alvo (Set-Out/2026)
 - [ ] Atividade 7 — testes unitários completos + comparação das técnicas (Out-Nov/2026)
