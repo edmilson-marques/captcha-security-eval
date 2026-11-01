@@ -77,6 +77,19 @@ def _image_content_block(screenshot_png: bytes) -> dict:
     return {"type": "input_image", "image_url": f"data:image/png;base64,{encoded}"}
 
 
+def _strip_ui_instructions(instruction: str) -> str:
+    """Remove instruções de interface irrelevantes ao critério de seleção.
+
+    O texto bruto extraído da página inclui frases como 'Clique em
+    "Confirmar" quando não houver mais nenhuma.' ou 'Se não houver nenhum,
+    clique em "Pular".' — isso é instrução de botão para um usuário humano,
+    não faz parte do critério de classificação em si. Mantém só a parte
+    anterior a essas frases (não é reformulação da tarefa, só remoção de
+    ruído que não muda o significado do critério).
+    """
+    return instruction.split("Clique em")[0].split("Se não houver")[0].strip()
+
+
 def solve_recaptcha_grid(
     screenshot_png: bytes,
     instruction: str,
@@ -89,14 +102,16 @@ def solve_recaptcha_grid(
     `screenshot_png` deve conter só a área da grade de imagens (sem o
     cabeçalho de instrução nem os botões), para reduzir tokens de imagem e
     ambiguidade — a instrução textual já é passada separadamente em
-    `instruction`.
+    `instruction` (o prompt usa só a parte relevante ao critério de seleção,
+    ver `_strip_ui_instructions`).
     """
     client = client or _client()
+    criterion = _strip_ui_instructions(instruction)
     prompt = (
         f"Esta imagem mostra uma grade de {grid_rows}x{grid_cols} células "
         f"(numeradas de 0 a {grid_rows * grid_cols - 1}, da esquerda para a "
         f"direita e de cima para baixo) de um desafio CAPTCHA. Instrução "
-        f'original do desafio: "{instruction}". Identifique os índices de '
+        f'original do desafio: "{criterion}". Identifique os índices de '
         f"todas as células que correspondem à instrução."
     )
     response = client.responses.parse(

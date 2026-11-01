@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from attacks.llm_vision_solver import (
     PuzzlePieceAnswer,
     RecaptchaGridAnswer,
+    _strip_ui_instructions,
     solve_puzzle_piece,
     solve_recaptcha_grid,
 )
@@ -42,6 +43,41 @@ def test_solve_recaptcha_grid_returns_parsed_answer_and_builds_correct_request()
     assert "3x3" in content[0]["text"]
     assert content[1]["type"] == "input_image"
     assert content[1]["image_url"].startswith("data:image/png;base64,")
+
+
+def test_strip_ui_instructions_removes_button_instructions_only():
+    assert (
+        _strip_ui_instructions(
+            'Selecione todas as imagens com\num ônibus\nClique em "Confirmar" quando não houver mais nenhuma.'
+        )
+        == "Selecione todas as imagens com\num ônibus"
+    )
+    assert (
+        _strip_ui_instructions(
+            'Selecione todos os quadrados com motocicletas\nSe não houver nenhum, clique em "Pular"'
+        )
+        == "Selecione todos os quadrados com motocicletas"
+    )
+    assert _strip_ui_instructions("Selecione todas as imagens com bicicletas") == (
+        "Selecione todas as imagens com bicicletas"
+    )
+
+
+def test_solve_recaptcha_grid_strips_ui_instructions_from_prompt():
+    expected = RecaptchaGridAnswer(tile_indices=[], reasoning="nenhum")
+    client = _fake_client(expected)
+
+    solve_recaptcha_grid(
+        screenshot_png=b"fake-png-bytes",
+        instruction='Selecione todas as imagens com\num ônibus\nClique em "Confirmar" quando não houver mais nenhuma.',
+        grid_rows=3,
+        grid_cols=3,
+        client=client,
+    )
+
+    prompt_text = client.responses.parse.call_args.kwargs["input"][0]["content"][0]["text"]
+    assert "Confirmar" not in prompt_text
+    assert "ônibus" in prompt_text
 
 
 def test_solve_puzzle_piece_returns_parsed_answer_and_builds_correct_request():
