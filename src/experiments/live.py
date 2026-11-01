@@ -523,9 +523,27 @@ def hcaptcha_llm_vision_attempt(
     chamadas, o que votação por maioria não resolve; ou (b) hCaptcha pode
     exigir uma tolerância de acerto mais estreita e/ou uma sequência de
     eventos de clique mais específica para esse tipo de desafio do que para
-    o arrastar-e-encaixar (que tem alguma tolerância de "encaixe"), algo que
-    só uma instrumentação ao nível de evento JS no iframe do desafio
-    conseguiria confirmar ou descartar.
+    o arrastar-e-encaixar (que tem alguma tolerância de "encaixe").
+
+    **Instrumentação a nível de evento JS (2026-11-01, a pedido do usuário):
+    descarta a hipótese (b).** Injetei listeners (`pointerdown`, `mousedown`,
+    `pointerup`, `mouseup`, `click`) diretamente no `<canvas>`, de dentro do
+    iframe do desafio, e cliquei em 3 pontos conhecidos (centro, perto do
+    canto superior-esquerdo, perto do canto inferior-direito) via
+    `harness.humanized_actions.click_canvas_point`. Resultado, sem exceção
+    em nenhum dos 3 pontos: sequência completa e realista de eventos
+    (`pointerdown` → `mousedown` → `pointerup` → `mouseup` → `click`), **100%
+    `isTrusted=true`** (entrada real via protocolo do navegador, não evento
+    sintetizado em JS) e **coordenada relativa ao canvas idêntica, pixel a
+    pixel, ao ponto pedido** nos 3 casos — sem deslocamento, sem erro de
+    escala, sem inversão de eixo. Ou seja, o mecanismo de clique em si está
+    correto; não há bug de execução nem rejeição de evento a explicar o 0/23.
+    Isso concentra a causa remanescente na hipótese (a): uma limitação de
+    precisão visual do próprio modelo para esses dois tipos específicos de
+    desafio, sistemática o suficiente pra não ceder nem a múltiplas chamadas
+    (self-consistency). Não testei aqui se um modelo mais forte (`gpt-6-astra`)
+    ou um pré-processamento de imagem diferente mudaria isso — ficaria para
+    uma próxima rodada, se o usuário pedir.
     """
     driver = build_driver(BrowserConfig(headless=headless))
     try:

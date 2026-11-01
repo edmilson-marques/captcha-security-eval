@@ -18,6 +18,17 @@ por si só, um sinal de automação.
 Não tem suíte pytest (depende de um `<canvas>` real renderizado num
 navegador) — mesma categoria de `experiments/live.py`, validado manualmente
 contra a demo oficial do hCaptcha.
+
+**Confirmado ao vivo em 2026-11-01** via instrumentação de eventos JS
+(listeners injetados no `<canvas>` real do desafio): `click_canvas_point`
+produz a sequência completa e esperada de eventos
+(`pointerdown`→`mousedown`→`pointerup`→`mouseup`→`click`), todos com
+`isTrusted=true`, e a coordenada recebida pelo navegador bate exatamente,
+pixel a pixel, com a coordenada pedida — testado em 3 pontos diferentes do
+canvas, sem desvio em nenhum. Descarta bug de execução/coordenada como causa
+da baixa taxa de sucesso observada nos desafios "ícone diferente" e "laços
+fechados" (ver `experiments.live.hcaptcha_llm_vision_attempt`) — a causa
+remanescente é mais provavelmente precisão visual do modelo, não este módulo.
 """
 
 from __future__ import annotations
