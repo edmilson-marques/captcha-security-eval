@@ -100,8 +100,18 @@ headless continha literalmente `"HeadlessChrome"` (achado e corrigido em
 deram 2/5 sucessos** — das 3 falhas restantes, 2 foram recusas de segurança do modelo e
 1 foi imprecisão visual real (sem recusa, loop convergiu certo). Ou seja, com o sinal de
 bot removido, a causa de falha passou a ser só o que interessa à comparação do estudo
-(recusa de segurança vs. imprecisão visual), não mais um artefato do harness. Detalhamento
-completo na docstring de `recaptcha_llm_vision_attempt` em `src/experiments/live.py`.
+(recusa de segurança vs. imprecisão visual), não mais um artefato do harness.
+
+**Lote de 20 tentativas reais, para significância estatística**: **10/20 sucessos
+(50%)**, confirmando a taxa da amostra pequena anterior. Reclassificando as 10 falhas
+pelo formato real da saída (vazio vs. não-vazio, não pela palavra "não posso" no texto
+de `reasoning`): **4/20 (20%) recusa verdadeira** (`tile_indices: []`) e **6/20 (30%)
+resposta real rejeitada** (imprecisão visual, loop convergiu normalmente). Achado extra:
+em 2 das 20, o modelo verbalizou recusa no `reasoning` mas ainda assim preencheu
+`tile_indices` com uma resposta real (uma delas até teve sucesso) — uma "recusa
+performática" que não corresponde a recusa efetiva; por isso o critério de recusa usado
+é a saída vazia, não o texto livre. Detalhamento completo na docstring de
+`recaptcha_llm_vision_attempt` em `src/experiments/live.py`.
 
 ## Rodando o OCR (opcional)
 
@@ -125,11 +135,11 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       de desafio observados ao vivo — arrastar-e-encaixar, "laços fechados" — não são
       grade de tiles). O `llm_vision` do reCAPTCHA já tem loop de refinamento por rodadas
       e, depois de corrigir o vazamento de fingerprint (`"HeadlessChrome"` no user-agent,
-      PR #1), **2/5 sucessos reais** na última rodada — as 3 falhas restantes se dividem
-      entre recusa de segurança do modelo e imprecisão visual, não mais detecção de bot
-      (ver seção acima). **Falta**: ligar o Turnstile (precisa de página própria). Rodar
-      lotes maiores de coleta deve ter ritmo/volume combinado com o orientador (ver
-      "Escopo ético" acima).
+      PR #1), **10/20 sucessos reais (50%)** num lote maior — as falhas restantes se
+      dividem entre recusa de segurança do modelo (20%) e imprecisão visual (30%), não
+      mais detecção de bot (ver seção acima). **Falta**: ligar o Turnstile (precisa de
+      página própria). Rodar lotes maiores de coleta deve ter ritmo/volume combinado com
+      o orientador (ver "Escopo ético" acima).
 - [x] Atividade 7 — testes unitários (72 passed/3 skipped) + comparação das
       técnicas (`analysis/compare.py`) (Out-Nov/2026)
 - [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo
