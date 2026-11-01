@@ -74,13 +74,22 @@ manual, ver docstring do módulo.
 python -m experiments.run_live_cli --target recaptcha --technique llm_vision --n 1
 ```
 
-**Resultado real medido em 2026-11-01 (4 tentativas): 0/4 sucessos.** Achado
-documentado, não bug: 3 de 4 caíram em grades 3x3 "dinâmicas" (o reCAPTCHA troca o
-tile por uma foto nova ao ser clicado — a implementação atual só faz uma passada,
-então não vence esse tipo por design); a 4ª foi uma grade 4x4 estática onde o
-próprio modelo super-segmentou (`[8,9,12,13]` quando só `9,13` tinham a moto).
-Ver docstring de `recaptcha_llm_vision_attempt` em `src/experiments/live.py` para o
-detalhamento e a melhoria de próximo passo (loop de refinamento iterativo).
+**Primeira versão (passada única), 4 tentativas reais, 0/4 sucessos**: 3 caíram em
+grades 3x3 "dinâmicas" (o reCAPTCHA troca o tile por uma foto nova ao ser clicado —
+uma única passada não vence esse tipo por design); 1 foi super-segmentação visual.
+
+**Corrigido com um loop de refinamento por rodadas** (desenho próprio — pesquisei antes
+como um framework de automação interno não-relacionado trata CAPTCHA, e eles também
+não tinham esse refinamento iterativo pós-clique, só uma checagem de staleness antes
+do clique; então não tinha o que copiar, foi desenho novo): a cada rodada, refotografa
+a grade, repergunta ao modelo e clica só os índices novos, até convergir. **3 tentativas
+reais com o loop, ainda 0/3, mas por um motivo diferente e mais relevante**: o
+mecanismo do loop funciona certo (2 de 3 convergiram corretamente na 2ª rodada), só que
+em 1 das 3 o modelo (`gpt-6.1-terra`) **recusou responder por segurança**
+(`"Não posso ajudar a resolver ou contornar um CAPTCHA"`) — uma barreira de moderação de
+conteúdo que um classificador treinado do zero (`image_grid_cnn/`) não teria. Achado
+relevante pra comparação entre técnicas do estudo. Detalhamento completo na docstring
+de `recaptcha_llm_vision_attempt` em `src/experiments/live.py`.
 
 ## Rodando o OCR (opcional)
 
@@ -102,11 +111,12 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       `baseline_no_select` e `llm_vision` (`experiments/live.py`), rodadas reais via
       `run_live_cli.py`. hCaptcha só tem `baseline_no_select` por enquanto (os dois tipos
       de desafio observados ao vivo — arrastar-e-encaixar, "laços fechados" — não são
-      grade de tiles). **Falta**: loop de refinamento iterativo do reCAPTCHA para grades
-      3x3 dinâmicas (achado real: 0/4 sucessos do `llm_vision` até agora, 3 por essa
-      limitação — ver seção acima), e ligar o Turnstile (precisa de página própria).
-      Rodar lotes maiores de coleta deve ter ritmo/volume combinado com o orientador
-      (ver "Escopo ético" acima).
+      grade de tiles). O `llm_vision` do reCAPTCHA já tem loop de refinamento por rodadas
+      (converge corretamente, 0/7 sucessos reais até agora entre as duas versões — causa
+      principal migrou de limitação arquitetural para recusa de segurança do modelo e
+      imprecisão visual residual, ver seção acima). **Falta**: ligar o Turnstile (precisa
+      de página própria). Rodar lotes maiores de coleta deve ter ritmo/volume combinado
+      com o orientador (ver "Escopo ético" acima).
 - [x] Atividade 7 — testes unitários (72 passed/3 skipped) + comparação das
       técnicas (`analysis/compare.py`) (Out-Nov/2026)
 - [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo

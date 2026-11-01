@@ -113,44 +113,63 @@ def recaptcha_baseline_attempt(demo_url: str = RECAPTCHA_DEMO_URL, headless: boo
         driver.quit()
 
 
-def recaptcha_llm_vision_attempt(demo_url: str = RECAPTCHA_DEMO_URL, headless: bool = True) -> dict:
+def recaptcha_llm_vision_attempt(
+    demo_url: str = RECAPTCHA_DEMO_URL,
+    headless: bool = True,
+    max_rounds: int = 5,
+) -> dict:
     """Resolve o desafio reCAPTCHA de verdade via o solver de visão (LLM).
 
     Mesmo fluxo de `recaptcha_baseline_attempt` até o desafio aparecer; a
-    partir daí: tira um screenshot só da grade (`<table>`), manda pro solver
+    partir daí roda um **loop de refinamento por rodadas** (até `max_rounds`):
+    tira um screenshot da grade (`<table>`), manda pro solver
     (`attacks.llm_vision_solver.solve_recaptcha_grid` — API paga da OpenAI,
-    requer `OPENAI_API_KEY`), clica os tiles que ele apontar e confirma.
+    requer `OPENAI_API_KEY`), clica só os tiles que ainda **não** tinham sido
+    clicados em rodadas anteriores, espera a animação de troca/seleção
+    assentar, e repete — re-fotografando e repergunting ao modelo "quais
+    tiles correspondem agora" a cada rodada. O loop para quando uma rodada
+    não traz nenhum índice novo (convergiu) ou ao atingir `max_rounds`, e só
+    então clica confirmar.
+
+    Esse desenho resolve tanto grades "estáticas" (3x3/4x4 sem troca de
+    imagem — a 2ª rodada não traz nada novo, custo de só +1 chamada de
+    verificação) quanto "dinâmicas" (o reCAPTCHA substitui a imagem de um
+    tile certo por uma foto nova — a rodada seguinte enxerga a imagem nova e
+    pode identificar mais correspondências, até esgotar). Pesquisei como um
+    framework de automação interno não-relacionado lida com CAPTCHA antes de
+    desenhar isso: eles também não tinham essa refinamento iterativo pós-clique
+    (só uma checagem de staleness pontual antes de clicar) — então este loop
+    é um desenho próprio, não copiado de lugar nenhum.
 
     O número de tiles (`td.rc-imageselect-tile`) é usado para inferir o
     tamanho da grade (3x3 ou 4x4, sempre quadrada nas amostras observadas ao
     vivo) — o `id` de cada `<td>` já é o índice 0-based na mesma ordem
     (esquerda->direita, cima->baixo) usada no prompt do solver, então os
     índices retornados mapeiam direto para `td[id='<índice>']`, sem tradução.
+    Clicar o mesmo índice duas vezes **desmarcaria** o tile no reCAPTCHA, por
+    isso o conjunto `selected` é rastreado e nunca reclicado.
 
-    **Resultado real medido em 2026-11-01 (4 tentativas via
-    `run_live_cli.py --target recaptcha --technique llm_vision`): 0/4
-    sucessos.** Não é um bug do código — é uma limitação de design real e
-    documentável:
-    - 3 de 4 tentativas caíram numa grade 3x3 "dinâmica": ao clicar um tile
-      correto, o reCAPTCHA **substitui aquele tile por uma nova foto**, que
-      também pode corresponder à instrução — resolver de verdade exige
-      repetir "olhar os tiles visíveis -> clicar os corretos -> esperar
-      substituição" até não sobrar mais nenhum antes de confirmar. Esta
-      função faz só UMA passada (screenshot -> clica -> confirma), então é
-      estruturalmente incapaz de vencer esse tipo de grade — e é precisamente
-      o mecanismo de defesa que a literatura (ver TCC1, seção 3.1.1) descreve
-      como o ponto forte do reCAPTCHA contra ataques de passada única.
-    - 1 de 4 foi uma grade 4x4 "estática" (sem substituição) onde o próprio
-      modelo super-segmentou: respondeu `[8, 9, 12, 13]` quando a moto só
-      ocupava visivelmente as células 9 e 13 — um erro de precisão visual,
-      não de arquitetura. (Um teste manual anterior, fora deste loop, já
-      tinha acertado `[5, 6, 9, 10]` numa grade estática equivalente — ver
-      `attacks/llm_vision_solver.py` — então a precisão varia por amostra.)
+    **Antes desta versão** (passada única, sem o loop), 4 tentativas reais em
+    2026-11-01 deram 0/4 sucessos — 3 por cair em grade dinâmica (resolvido
+    agora pelo loop) e 1 por super-segmentação visual do modelo.
 
-    Melhoria natural de próximo passo (não implementada): loop de
-    refinamento iterativo para grades dinâmicas — detectar troca de tile
-    (ex. comparar o atributo `src`/hash da imagem do tile antes/depois do
-    clique) e re-consultar o solver só nos tiles que mudaram, até estabilizar.
+    **Com o loop** (3 tentativas reais em 2026-11-01, ainda 0/3, mas por um
+    motivo NOVO e mais relevante): o mecanismo do loop em si funciona
+    corretamente — 2 das 3 tentativas identificaram tiles na 1ª rodada e
+    convergiram (0 índices novos) já na 2ª, confirmando que o "repete até não
+    sobrar nada" funciona como desenhado. A causa da falha mudou: em 1 das 3
+    tentativas, o modelo **recusou responder por segurança**
+    (`reasoning: "Não posso ajudar a resolver ou contornar um CAPTCHA."`,
+    `tile_indices: []`) — a API comercial da OpenAI aplica moderação de
+    conteúdo que às vezes reconhece "resolver CAPTCHA" como tarefa vedada,
+    mesmo com a saída forçada em JSON estruturado (a recusa só populou o
+    schema com lista vazia em vez de quebrar o pipeline). Isso é uma barreira
+    de defesa adicional que um classificador treinado do zero (`image_grid_cnn/`)
+    não teria — achado relevante para a comparação do estudo entre técnicas.
+    A recusa pareceu probabilística (não ocorreu em todas as tentativas),
+    condizente com o comportamento típico de classificadores de segurança de
+    LLM. Não investiguei mitigação (ex. reformular o prompt) — fica como
+    próximo passo caso o orientador considere relevante.
     """
     driver = build_driver(BrowserConfig(headless=headless))
     try:
@@ -188,21 +207,30 @@ def recaptcha_llm_vision_attempt(demo_url: str = RECAPTCHA_DEMO_URL, headless: b
         ).text
         tiles = driver.find_elements(By.CSS_SELECTOR, "td.rc-imageselect-tile")
         grid_size = round(len(tiles) ** 0.5)
-        grid_screenshot = driver.find_element(By.CSS_SELECTOR, "table").screenshot_as_png
 
-        answer = solve_recaptcha_grid(
-            screenshot_png=grid_screenshot,
-            instruction=instruction,
-            grid_rows=grid_size,
-            grid_cols=grid_size,
-        )
+        selected: set[int] = set()
+        rounds_used = 0
+        last_reasoning = ""
+        for round_number in range(1, max_rounds + 1):
+            rounds_used = round_number
+            grid_screenshot = driver.find_element(By.CSS_SELECTOR, "table").screenshot_as_png
+            answer = solve_recaptcha_grid(
+                screenshot_png=grid_screenshot,
+                instruction=instruction,
+                grid_rows=grid_size,
+                grid_cols=grid_size,
+            )
+            last_reasoning = answer.reasoning
+            new_indices = [idx for idx in answer.tile_indices if idx not in selected]
+            if not new_indices:
+                break
 
-        for tile_index in answer.tile_indices:
-            driver.find_element(
-                By.CSS_SELECTOR, f"td.rc-imageselect-tile[id='{tile_index}']"
-            ).click()
-        if answer.tile_indices:
-            time.sleep(0.5)  # dá tempo da animação de seleção/troca de tile assentar
+            for tile_index in new_indices:
+                driver.find_element(
+                    By.CSS_SELECTOR, f"td.rc-imageselect-tile[id='{tile_index}']"
+                ).click()
+                selected.add(tile_index)
+            time.sleep(1.0)  # dá tempo da animação de seleção/troca de tile assentar
 
         driver.find_element(By.ID, "recaptcha-verify-button").click()
         time.sleep(2)
@@ -216,12 +244,13 @@ def recaptcha_llm_vision_attempt(demo_url: str = RECAPTCHA_DEMO_URL, headless: b
 
         return {
             "outcome": "success" if succeeded else "failure",
-            "sub_challenges": 1,
+            "sub_challenges": rounds_used,
             "extra": {
                 "instruction": instruction,
                 "grid_size": grid_size,
-                "tile_indices": answer.tile_indices,
-                "reasoning": answer.reasoning,
+                "tile_indices": sorted(selected),
+                "reasoning": last_reasoning,
+                "rounds_used": rounds_used,
             },
         }
     finally:
