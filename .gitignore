@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Dados coletados / resultados de experimentos (grandes, não versionados)
+data/raw/**/*
+!data/raw/**/.gitkeep
+data/results/**/*
+!data/results/**/.gitkeep
+
+# Checkpoints de modelo
+*.pt
+*.pth
+*.onnx
+
+# Segredos / ambiente local
+.env
+.env.*
+
+# IDE / SO
+.vscode/
+.idea/
+.DS_Store
+
+# Notebooks - outputs
+.ipynb_checkpoints/

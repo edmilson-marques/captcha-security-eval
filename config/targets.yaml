@@ -1,0 +1,50 @@
+# Alvos do estudo comparativo (cronograma TCC2, Atividades 1, 4-6).
+#
+# IMPORTANTE (decisão de escopo validada com o orientando em 2026-11-01):
+# os experimentos rodam SOMENTE contra páginas de demonstração/sandbox dos
+# próprios fornecedores (ou contra uma página própria do aluno usando a
+# sitekey oficial do fornecedor), nunca contra sites de produção de terceiros.
+#
+# Pesquisado em 2026-11-01:
+#   - Google e hCaptcha mantêm página de demo PRÓPRIA com widget real.
+#   - A Cloudflare NÃO mantém uma página de demo full-page com widget
+#     interativo (confirmado em developers.cloudflare.com/turnstile/get-started/
+#     e developers.cloudflare.com/turnstile/troubleshooting/testing/ — só
+#     documentação + sitekeys de teste "always pass/block/challenge", que
+#     não geram desafio cognitivo real). Para o Turnstile, a alternativa
+#     metodologicamente mais correta é o aluno criar uma página própria e
+#     registrar uma sitekey gratuita no painel Cloudflare (modo "Managed"),
+#     o que dá um motor de risco real reagindo a sinais comportamentais
+#     genuínos, sobre propriedade do próprio aluno — validar com o orientador.
+
+targets:
+  recaptcha:
+    nome: "Google reCAPTCHA v2"
+    demo_url: "https://www.google.com/recaptcha/api2/demo"
+    tipo_desafio: "checkbox + fallback de grade de imagens"
+    observacao: "Demo oficial do Google, sitekey de demonstração do próprio Google."
+
+  hcaptcha:
+    nome: "hCaptcha"
+    demo_url: "https://accounts.hcaptcha.com/demo"
+    tipo_desafio: "grade de imagens"
+    observacao: "Demo oficial da Intuition Machines (hCaptcha), sitekey de demonstração própria."
+
+  turnstile:
+    nome: "Cloudflare Turnstile"
+    demo_url: null  # TODO: preencher após o aluno publicar a página própria (ver observação)
+    tipo_desafio: "invisível/comportamental; raramente apresenta desafio visual"
+    observacao: >
+      Sem demo oficial full-page da Cloudflare. Usar página própria do aluno
+      com sitekey Cloudflare real (modo Managed) OU, só para testar o
+      pipeline/código (não para medir robustez), as sitekeys de teste
+      documentadas em developers.cloudflare.com/turnstile/troubleshooting/testing/.
+    sitekeys_de_teste_cloudflare:
+      sempre_passa: "1x00000000000000000000AA"
+      sempre_bloqueia: "2x00000000000000000000AB"
+      sempre_forca_desafio_interativo: "3x00000000000000000000FF"
+
+selenium:
+  headless: true
+  window_size: [1366, 900]
+  implicit_wait_seconds: 5

@@ -1,0 +1,13 @@
+[project]
+name = "captcha-security-eval"
+version = "0.1.0"
+description = "Avaliação experimental de segurança de Google reCAPTCHA, hCaptcha e Cloudflare Turnstile (TCC2 - UFPel)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
