@@ -13,6 +13,7 @@ from functools import partial
 
 from experiments.live import (
     hcaptcha_baseline_attempt,
+    hcaptcha_llm_vision_attempt,
     recaptcha_baseline_attempt,
     recaptcha_llm_vision_attempt,
 )
@@ -26,6 +27,7 @@ ATTEMPT_FNS = {
     },
     "hcaptcha": {
         "baseline_no_select": hcaptcha_baseline_attempt,
+        "llm_vision": hcaptcha_llm_vision_attempt,
     },
 }
 

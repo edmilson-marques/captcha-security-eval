@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from evasion.cookie_manager import CookieManager
-from evasion.human_behavior import bezier_mouse_path, human_delay
+from evasion.human_behavior import bezier_mouse_path, canvas_offset_path, human_delay
 from evasion.proxy_rotation import ProxyRotator
 from evasion.user_agent_pool import (
     DEFAULT_USER_AGENTS,
@@ -198,3 +198,37 @@ def test_human_delay_with_aggressive_minimum():
     for _ in range(200):
         delay = human_delay(mean=0.0, std=1.0, minimum=0.1)
         assert delay >= 0.1
+
+
+# --------------------------------------------------------------------------
+# human_behavior.canvas_offset_path
+# --------------------------------------------------------------------------
+
+
+def test_canvas_offset_path_endpoints_are_center_relative():
+    canvas_size = (500, 470)
+    start_point = (250.0, 235.0)  # centro exato do canvas
+    end_point = (100.0, 50.0)
+
+    path = canvas_offset_path(canvas_size, start_point, end_point, n_points=10, jitter=0.0)
+
+    assert len(path) == 10
+    # start_point é o centro -> offset (0, 0).
+    assert path[0] == pytest.approx((0.0, 0.0))
+    # end_point convertido para offset relativo ao centro (250, 235).
+    assert path[-1] == pytest.approx((100.0 - 250.0, 50.0 - 235.0))
+
+
+def test_canvas_offset_path_matches_plain_bezier_after_conversion():
+    canvas_size = (500, 470)
+    start_point = (300.0, 400.0)
+    end_point = (50.0, 50.0)
+
+    path = canvas_offset_path(canvas_size, start_point, end_point, n_points=8, jitter=0.0)
+    expected_start_offset = (300.0 - 250.0, 400.0 - 235.0)
+    expected_end_offset = (50.0 - 250.0, 50.0 - 235.0)
+    expected = bezier_mouse_path(expected_start_offset, expected_end_offset, n_points=8, jitter=0.0)
+
+    assert len(path) == len(expected)
+    for actual_point, expected_point in zip(path, expected, strict=True):
+        assert actual_point == pytest.approx(expected_point)

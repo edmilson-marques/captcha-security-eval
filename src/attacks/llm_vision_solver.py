@@ -32,11 +32,24 @@ entrada/saída, bom equilíbrio custo-precisão, com janela de contexto de
 economia, especialmente para o caso mais simples (classificação de grade,
 sem coordenadas geométricas finas). `gpt-6-astra` (flagship, US$10/US$50)
 fica reservado para o caso de `terra` não ter precisão suficiente.
+
+**Extensões de 2026-11-01** (para cobrir os desafios do hCaptcha além da
+grade — ver `harness/collectors/hcaptcha_collector.py`): `solve_canvas_points`
+resolve desafios de clique livre (1 ou mais pontos) sobre um `<canvas>` sem
+elementos DOM individuais (ex. "ícone diferente", "laços fechados");
+`solve_puzzle_piece` passou a pedir também a posição de origem da peça
+(`DragPuzzleAnswer`, antes só tinha o destino), necessária pra um arrasto de
+verdade via `harness/humanized_actions.py`; `solve_recaptcha_grid_by_majority_vote`
+reduz imprecisão visual chamando o classificador N vezes e combinando por
+maioria simples, técnica equivalente à usada em frameworks de automação
+internos não relacionados a este projeto (pesquisa conceitual, sem copiar
+código).
 """
 
 from __future__ import annotations
 
 import base64
+import collections
 
 from openai import OpenAI
 from pydantic import BaseModel, Field
@@ -56,16 +69,61 @@ class RecaptchaGridAnswer(BaseModel):
     reasoning: str = Field(description="Justificativa breve da escolha, em uma frase.")
 
 
-class PuzzlePieceAnswer(BaseModel):
-    """Resposta estruturada para um desafio de arrastar-e-encaixar (ex. hCaptcha)."""
+class DragPuzzleAnswer(BaseModel):
+    """Resposta estruturada para um desafio de arrastar-e-encaixar (ex. hCaptcha).
 
+    Antes chamada `PuzzlePieceAnswer` e com só `target_x`/`target_y`: faltava
+    a posição de origem da peça, necessária pra executar um arrasto de
+    verdade (clicar-e-segurar na peça antes de mover até o alvo) — ver
+    `harness/humanized_actions.drag_canvas_point`.
+    """
+
+    piece_x: int = Field(
+        description="Coordenada X (pixels, canto superior esquerdo da imagem) da peça solta a ser arrastada."
+    )
+    piece_y: int = Field(
+        description="Coordenada Y (pixels, canto superior esquerdo da imagem) da peça solta a ser arrastada."
+    )
     target_x: int = Field(
-        description="Coordenada X (pixels, relativa ao canto superior esquerdo da imagem) onde soltar a peça."
+        description="Coordenada X (pixels, canto superior esquerdo da imagem) onde soltar a peça."
     )
     target_y: int = Field(
-        description="Coordenada Y (pixels, relativa ao canto superior esquerdo da imagem) onde soltar a peça."
+        description="Coordenada Y (pixels, canto superior esquerdo da imagem) onde soltar a peça."
     )
     confidence: str = Field(description="Confiança na resposta: 'high', 'medium' ou 'low'.")
+
+
+class CanvasPoint(BaseModel):
+    """Um ponto de clique em pixels, canto superior esquerdo da imagem como origem.
+
+    Objeto dedicado (em vez de `tuple[int, int]`) porque a API da OpenAI
+    rejeita o schema JSON que o Pydantic gera para tupla de tamanho fixo
+    (`items` ausente/`prefixItems`, incompatível com o modo estrito de
+    structured outputs) — achado ao vivo em 2026-11-01, erro 400 "Invalid
+    schema for response_format ... array schema missing items".
+    """
+
+    x: int = Field(description="Coordenada X em pixels.")
+    y: int = Field(description="Coordenada Y em pixels.")
+
+
+class CanvasPointsAnswer(BaseModel):
+    """Resposta estruturada para desafios de clique em ponto(s) sobre um `<canvas>`.
+
+    Cobre tanto desafios de clique único (ex. "clique no ícone que é
+    diferente") quanto de seleção múltipla (ex. "clique em todos os laços
+    fechados") com o mesmo schema — a diferença é só o tamanho de `points`.
+    """
+
+    points: list[CanvasPoint] = Field(
+        description=(
+            "Lista de pontos a clicar, relativos ao canto superior esquerdo da "
+            "imagem. Uma lista com um único ponto para desafios de clique "
+            "único; vários pontos para desafios de seleção múltipla. Lista "
+            "vazia se nada corresponder."
+        )
+    )
+    reasoning: str = Field(description="Justificativa breve da escolha, em uma frase.")
 
 
 def _client() -> OpenAI:
@@ -135,15 +193,17 @@ def solve_puzzle_piece(
     screenshot_png: bytes,
     instruction: str,
     client: OpenAI | None = None,
-) -> PuzzlePieceAnswer:
-    """Pede ao modelo onde soltar a peça de um desafio de arrastar-e-encaixar."""
+) -> DragPuzzleAnswer:
+    """Pede ao modelo a origem e o destino da peça de um desafio de arrastar-e-encaixar."""
     client = client or _client()
     prompt = (
         "Esta imagem mostra um desafio CAPTCHA de arrastar-e-encaixar (drag "
-        f'and drop). Instrução original: "{instruction}". Identifique as '
-        "coordenadas de pixel (x, y), relativas ao canto superior esquerdo "
-        "da imagem, onde a peça destacada deve ser solta para se encaixar "
-        "corretamente na imagem de fundo."
+        f'and drop). Instrução original: "{instruction}". Identifique (1) as '
+        "coordenadas de pixel (x, y) da peça solta, destacada/em destaque, que "
+        "precisa ser arrastada, e (2) as coordenadas de pixel (x, y) do local "
+        "(recorte/contorno) onde essa peça deve ser solta para se encaixar "
+        "corretamente na imagem de fundo. Ambas relativas ao canto superior "
+        "esquerdo da imagem."
     )
     response = client.responses.parse(
         model=MODEL_ID,
@@ -157,6 +217,101 @@ def solve_puzzle_piece(
                 ],
             }
         ],
-        text_format=PuzzlePieceAnswer,
+        text_format=DragPuzzleAnswer,
     )
     return response.output_parsed
+
+
+def solve_canvas_points(
+    screenshot_png: bytes,
+    instruction: str,
+    client: OpenAI | None = None,
+) -> CanvasPointsAnswer:
+    """Pede ao modelo em quais pontos clicar num desafio renderizado em `<canvas>`.
+
+    Cobre desafios de clique único (ex. "ícone diferente") e de seleção
+    múltipla (ex. "laços fechados") — não há grade de células aqui, a
+    resposta é em coordenadas de pixel livres, não índices de tile.
+    """
+    client = client or _client()
+    criterion = _strip_ui_instructions(instruction)
+    prompt = (
+        "Esta imagem mostra um desafio CAPTCHA desenhado livremente (não é "
+        f'uma grade de células). Instrução original: "{criterion}". '
+        "Identifique as coordenadas de pixel (x, y), relativas ao canto "
+        "superior esquerdo da imagem, de cada ponto que deve ser clicado "
+        "para satisfazer a instrução. Pode ser um único ponto ou vários."
+    )
+    response = client.responses.parse(
+        model=MODEL_ID,
+        max_output_tokens=1024,
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    _image_content_block(screenshot_png),
+                ],
+            }
+        ],
+        text_format=CanvasPointsAnswer,
+    )
+    return response.output_parsed
+
+
+def solve_recaptcha_grid_by_majority_vote(
+    screenshot_png: bytes,
+    instruction: str,
+    grid_rows: int,
+    grid_cols: int,
+    n_votes: int = 3,
+    client: OpenAI | None = None,
+) -> RecaptchaGridAnswer:
+    """Chama `solve_recaptcha_grid` `n_votes` vezes e combina por maioria simples.
+
+    Técnica de "self-consistency": em vez de confiar numa única chamada
+    (sensível a imprecisão visual pontual do modelo — ver achado nas 20
+    tentativas reais documentado em `experiments/live.py`), pergunta a mesma
+    coisa `n_votes` vezes e só mantém, na resposta final, os índices que
+    foram escolhidos em **mais da metade** das rodadas válidas — nem união
+    (que soma todos os palpites e piora falso-positivo) nem unanimidade (que
+    descarta acertos por causa de uma única rodada ruim). Tolerante a falha:
+    se uma chamada individual lançar exceção, a votação segue com as demais;
+    só propaga o erro se todas falharem. `n_votes=1` desliga a votação (uma
+    chamada só, sem custo extra) — útil quando o ganho de confiabilidade não
+    compensa o custo de API extra.
+
+    Desenho inspirado numa técnica equivalente que encontrei (pesquisa
+    conceitual, sem copiar código) em frameworks de automação internos não
+    relacionados a este projeto acadêmico — eles usam exatamente maioria
+    simples sobre múltiplas chamadas do mesmo classificador de visão, pelo
+    mesmo motivo.
+    """
+    if n_votes < 1:
+        raise ValueError("n_votes deve ser >= 1.")
+
+    answers: list[RecaptchaGridAnswer] = []
+    last_error: Exception | None = None
+    for _ in range(n_votes):
+        try:
+            answers.append(
+                solve_recaptcha_grid(
+                    screenshot_png=screenshot_png,
+                    instruction=instruction,
+                    grid_rows=grid_rows,
+                    grid_cols=grid_cols,
+                    client=client,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - qualquer rodada pode falhar isoladamente
+            last_error = exc
+
+    if not answers:
+        assert last_error is not None
+        raise last_error
+
+    votes = collections.Counter(idx for answer in answers for idx in answer.tile_indices)
+    majority_threshold = len(answers) / 2
+    winning_indices = sorted(idx for idx, count in votes.items() if count > majority_threshold)
+    combined_reasoning = " | ".join(answer.reasoning for answer in answers)
+    return RecaptchaGridAnswer(tile_indices=winning_indices, reasoning=combined_reasoning)

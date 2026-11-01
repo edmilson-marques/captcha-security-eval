@@ -18,10 +18,12 @@ Implementa duas técnicas para o reCAPTCHA:
   (modelo multimodal, API paga da OpenAI — requer `OPENAI_API_KEY`).
   Validado ao vivo em 2026-11-01 (ver `recaptcha_llm_vision_attempt`).
 
-O hCaptcha ainda só tem a técnica "baseline_no_select" — os dois tipos de
-desafio observados ao vivo (arrastar-e-encaixar, seleção de "laços
-fechados") não são grade de tiles, então `image_grid_cnn`/`llm_vision_solver`
-ainda não se aplicam diretamente a ele (ver nota em `hcaptcha_collector.py`).
+O hCaptcha tem as mesmas duas técnicas: "baseline_no_select" e "llm_vision"
+(`hcaptcha_llm_vision_attempt`) — esta última detecta qual dos 4 tipos de
+desafio apareceu (grade de imagens, ícone diferente, arrastar-e-encaixar ou
+laços fechados — ver `hcaptcha_collector.py`) e resolve cada um com a
+abordagem adequada (grade reaproveita o solver de grade; os três tipos só-
+canvas usam clique/arrasto humanizado via `harness/humanized_actions.py`).
 """
 
 from __future__ import annotations
@@ -33,7 +35,11 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 
-from attacks.llm_vision_solver import solve_recaptcha_grid
+from attacks.llm_vision_solver import (
+    solve_canvas_points,
+    solve_puzzle_piece,
+    solve_recaptcha_grid_by_majority_vote,
+)
 from harness.browser import BrowserConfig, build_driver
 from harness.collectors.hcaptcha_collector import (
     CHALLENGE_IFRAME_SELECTOR as HCAPTCHA_CHALLENGE_IFRAME_SELECTOR,
@@ -47,6 +53,7 @@ from harness.collectors.recaptcha_collector import (
 from harness.collectors.recaptcha_collector import (
     CHALLENGE_IFRAME_SELECTOR as RECAPTCHA_CHALLENGE_IFRAME_SELECTOR,
 )
+from harness.humanized_actions import click_canvas_point, drag_canvas_point
 
 RECAPTCHA_DEMO_URL = "https://www.google.com/recaptcha/api2/demo"
 HCAPTCHA_DEMO_URL = "https://accounts.hcaptcha.com/demo"
@@ -117,6 +124,7 @@ def recaptcha_llm_vision_attempt(
     demo_url: str = RECAPTCHA_DEMO_URL,
     headless: bool = True,
     max_rounds: int = 5,
+    n_votes: int = 3,
 ) -> dict:
     """Resolve o desafio reCAPTCHA de verdade via o solver de visão (LLM).
 
@@ -223,6 +231,26 @@ def recaptcha_llm_vision_attempt(
     recusa ingênuo baseado em palavra-chave no texto de `reasoning`
     superestimaria a taxa real de recusa do modelo. Por isso a contagem acima
     usa `tile_indices == []` como critério de recusa, não o texto livre.
+
+    **Self-consistency por votação (`n_votes`, 20 tentativas reais em
+    2026-11-01): 15/20 sucessos (75%)** — salto em relação aos 10/20 (50%)
+    da versão anterior (uma única chamada por rodada). Cada rodada agora
+    chama `solve_recaptcha_grid_by_majority_vote` (pesquisei antes como
+    frameworks de automação internos não relacionados resolvem esse mesmo
+    problema — não copiei código, só a técnica: maioria simples sobre N
+    chamadas do classificador, tolerante a falha parcial). O efeito é
+    bem delimitado: das 10 falhas de antes, 6 eram imprecisão visual (uma
+    resposta real, sem recusa, mas errada) e 4 eram recusa de segurança.
+    Com votação, as falhas caíram para 5/20, sendo só **1/20 por imprecisão
+    visual** (redução de 6→1, exatamente o que a votação deveria atacar) e
+    **4/20 continuam por recusa de segurança** (taxa inalterada — a votação
+    não toca nisso, e não deveria: ela é só uma técnica de precisão visual,
+    não de contorno de recusa). Achado extra sobre a interação entre os
+    dois mecanismos: quando a maioria das rodadas de voto recusa e só uma
+    minoria responde de verdade, a resposta real da minoria **não** atinge
+    maioria simples e acaba descartada — ou seja, a recusa é "pegajosa" sob
+    votação por maioria (perde só se >50% das rodadas cooperarem), o que é o
+    comportamento correto/esperado do desenho, não um bug.
     """
     driver = build_driver(BrowserConfig(headless=headless))
     try:
@@ -267,11 +295,12 @@ def recaptcha_llm_vision_attempt(
         for round_number in range(1, max_rounds + 1):
             rounds_used = round_number
             grid_screenshot = driver.find_element(By.CSS_SELECTOR, "table").screenshot_as_png
-            answer = solve_recaptcha_grid(
+            answer = solve_recaptcha_grid_by_majority_vote(
                 screenshot_png=grid_screenshot,
                 instruction=instruction,
                 grid_rows=grid_size,
                 grid_cols=grid_size,
+                n_votes=n_votes,
             )
             last_reasoning = answer.reasoning
             new_indices = [idx for idx in answer.tile_indices if idx not in selected]
@@ -378,6 +407,210 @@ def hcaptcha_baseline_attempt(demo_url: str = HCAPTCHA_DEMO_URL, headless: bool 
             "outcome": "success" if succeeded else "failure",
             "sub_challenges": 1,
             "extra": {"prompt": prompt},
+        }
+    finally:
+        driver.quit()
+
+
+def hcaptcha_llm_vision_attempt(
+    demo_url: str = HCAPTCHA_DEMO_URL,
+    headless: bool = True,
+    max_rounds: int = 3,
+    n_votes: int = 3,
+) -> dict:
+    """Resolve o desafio hCaptcha de verdade — 4 tipos distintos observados ao vivo.
+
+    Mesmo fluxo de `hcaptcha_baseline_attempt` até o desafio aparecer. A
+    partir daí, a função **detecta o tipo de desafio pela estrutura do DOM**
+    (não só pelo texto do prompt, que varia) e resolve cada um de forma
+    diferente:
+
+    - **Grade de imagens** (ex. "Selecione coisas que podem ser úteis aqui",
+      detectada pela presença de elementos `.task` — ver
+      `hcaptcha_collector.py`): mesmo loop de refinamento por rodadas do
+      reCAPTCHA, reaproveitando `solve_recaptcha_grid_by_majority_vote`.
+    - **Arrastar-e-encaixar** (prompt contém "arrast"): o desafio inteiro é
+      um único `<canvas>` sem elementos clicáveis por item — `solve_puzzle_piece`
+      identifica a posição da peça E do alvo (`DragPuzzleAnswer`), e
+      `harness.humanized_actions.drag_canvas_point` executa o arrasto via
+      `ActionChains` com trajetória de Bézier (não um evento de mouse
+      sintetizado em JS).
+    - **Clique em ponto(s) sobre canvas** (qualquer outro prompt — cobre
+      "ícone diferente" e "laços fechados", ambos também renderizados só em
+      `<canvas>`): `solve_canvas_points` devolve 1 ou mais coordenadas, cada
+      uma clicada via `harness.humanized_actions.click_canvas_point`.
+
+    **Por que não dá pra usar seletor CSS por item nos três tipos acima**:
+    inspeção ao vivo do DOM (2026-11-01) mostrou que "ícone diferente",
+    "arrastar-e-encaixar" e "laços fechados" são desenhados inteiramente
+    dentro de um único elemento `<canvas>` — sem `<img>`/`<div>` individual
+    por ícone/peça/forma. A única forma de interagir é por coordenada de
+    pixel sobre o canvas, convertida para offset relativo ao **centro** do
+    elemento (`ActionChains.move_to_element_with_offset` usa essa convenção,
+    não canto superior esquerdo — confirmado na assinatura do método, não
+    chutado). Só o quarto tipo (grade) tem elementos `.task` individuais.
+
+    **Pesquisei antes como frameworks de automação internos não relacionados
+    a este projeto lidam com esses três tipos canvas — não tinha o que
+    copiar**: a estratégia observada lá nem tenta resolvê-los, só pede um
+    novo desafio repetidamente até sair um do tipo grade (o único que sabem
+    resolver). Confirma que esses três tipos são, de fato, um gap real,
+    não só deste projeto. O que aproveitei de lá foi a técnica de **execução**
+    do clique (não a de resolução): eventos de mouse sintetizados via JS puro
+    podem ser rejeitados por `isTrusted=false` mesmo com a resposta certa, daí
+    o uso de `ActionChains` com curva de Bézier em vez de um "teleporte" direto
+    ao alvo — ver `harness/humanized_actions.py` e
+    `evasion/human_behavior.canvas_offset_path`.
+
+    **Validado ao vivo em 2026-11-01, 20 tentativas reais: 4/20 sucessos
+    (20%)**, com uma diferença grande entre os tipos de desafio enfrentados
+    (nenhuma tentativa caiu no tipo grade nesta amostra):
+
+    - **Arrastar-e-encaixar: 4/7 sucessos (57%)** — a extração de origem +
+      destino da peça (`DragPuzzleAnswer`) combinada com o arrasto humanizado
+      (`drag_canvas_point`) funciona na maioria das vezes. É o resultado mais
+      forte desta rodada e valida a abordagem "clique confiável + trajetória
+      não-linear" sugerida pela pesquisa conceitual nos frameworks internos.
+    - **Clique em ponto(s) sobre canvas ("ícone diferente" + "laços
+      fechados"): 0/13 sucessos (0%)** — nenhum dos dois tipos resolvido
+      nesta amostra. Sem instrumentação adicional (fora do escopo desta
+      rodada de medição), não dá pra separar se a causa é imprecisão do
+      modelo (ex. a diferença entre ícones costuma ser sutil — ver o exemplo
+      em `scratchpad` desta sessão) ou algo na execução do clique específico
+      desses tipos; mecanicamente o clique não lança exceção em nenhuma das
+      13 tentativas (mesma função `click_canvas_point` usada com sucesso
+      dentro do fluxo de arrasto), o que aponta mais para precisão do modelo
+      do que para um bug de execução, mas isso não é conclusivo.
+    - Nenhum erro de execução (schema OpenAI, Selenium) em nenhuma das 20
+      tentativas — a `CanvasPointsAnswer.points` precisou virar
+      `list[CanvasPoint]` em vez de `list[tuple[int, int]]`: a API da OpenAI
+      rejeitava (erro 400) o schema JSON que o Pydantic gera para tupla de
+      tamanho fixo no modo estrito de structured outputs.
+
+    Isto é o resultado de uma única rodada de medição (bounded, como
+    combinado) depois de implementar os solvers — não uma otimização
+    iterada até um alvo de taxa de sucesso.
+    """
+    driver = build_driver(BrowserConfig(headless=headless))
+    try:
+        wait = WebDriverWait(driver, 15)
+        driver.get(demo_url)
+
+        checkbox_iframe = wait.until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, HCAPTCHA_CHECKBOX_IFRAME_SELECTOR))
+        )
+        driver.switch_to.frame(checkbox_iframe)
+        checkbox = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#checkbox")))
+        checkbox.click()
+        driver.switch_to.default_content()
+
+        try:
+            challenge_iframe = WebDriverWait(driver, 6).until(
+                EC.visibility_of_element_located(
+                    (By.CSS_SELECTOR, HCAPTCHA_CHALLENGE_IFRAME_SELECTOR)
+                )
+            )
+        except TimeoutException:
+            driver.switch_to.frame(checkbox_iframe)
+            passed = (
+                driver.find_element(By.CSS_SELECTOR, "#checkbox").get_attribute("aria-checked")
+                == "true"
+            )
+            driver.switch_to.default_content()
+            return {"outcome": "success" if passed else "challenge_not_presented"}
+
+        driver.switch_to.frame(challenge_iframe)
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".challenge-container")))
+        prompt = driver.find_element(By.CSS_SELECTOR, ".prompt-text").text
+
+        tasks = driver.find_elements(By.CSS_SELECTOR, ".task")
+        extra: dict = {"prompt": prompt}
+        rounds_used = 1
+
+        if tasks:
+            grid_size = round(len(tasks) ** 0.5)
+            selected: set[int] = set()
+            last_reasoning = ""
+            for round_number in range(1, max_rounds + 1):
+                rounds_used = round_number
+                grid_screenshot = driver.find_element(
+                    By.CSS_SELECTOR, ".task-grid"
+                ).screenshot_as_png
+                answer = solve_recaptcha_grid_by_majority_vote(
+                    screenshot_png=grid_screenshot,
+                    instruction=prompt,
+                    grid_rows=grid_size,
+                    grid_cols=grid_size,
+                    n_votes=n_votes,
+                )
+                last_reasoning = answer.reasoning
+                new_indices = [idx for idx in answer.tile_indices if idx not in selected]
+                if not new_indices:
+                    break
+                current_tasks = driver.find_elements(By.CSS_SELECTOR, ".task")
+                for tile_index in new_indices:
+                    current_tasks[tile_index].click()
+                    selected.add(tile_index)
+                time.sleep(1.0)
+            extra.update(
+                {
+                    "challenge_type": "grid",
+                    "grid_size": grid_size,
+                    "tile_indices": sorted(selected),
+                    "reasoning": last_reasoning,
+                    "rounds_used": rounds_used,
+                }
+            )
+        else:
+            canvas = driver.find_element(By.CSS_SELECTOR, "canvas")
+            canvas_wh = (canvas.size["width"], canvas.size["height"])
+            screenshot = canvas.screenshot_as_png
+
+            if "arrast" in prompt.lower():
+                drag_answer = solve_puzzle_piece(screenshot_png=screenshot, instruction=prompt)
+                drag_canvas_point(
+                    driver,
+                    canvas,
+                    (drag_answer.piece_x, drag_answer.piece_y),
+                    (drag_answer.target_x, drag_answer.target_y),
+                    canvas_wh,
+                )
+                extra.update(
+                    {
+                        "challenge_type": "drag_puzzle",
+                        "piece_point": (drag_answer.piece_x, drag_answer.piece_y),
+                        "target_point": (drag_answer.target_x, drag_answer.target_y),
+                        "confidence": drag_answer.confidence,
+                    }
+                )
+            else:
+                click_answer = solve_canvas_points(screenshot_png=screenshot, instruction=prompt)
+                for point in click_answer.points:
+                    click_canvas_point(driver, canvas, (point.x, point.y), canvas_wh)
+                    time.sleep(0.3)
+                extra.update(
+                    {
+                        "challenge_type": "canvas_points",
+                        "points": [(point.x, point.y) for point in click_answer.points],
+                        "reasoning": click_answer.reasoning,
+                    }
+                )
+
+        driver.find_element(By.CSS_SELECTOR, ".button-submit").click()
+        time.sleep(2)
+        driver.switch_to.default_content()
+
+        driver.switch_to.frame(checkbox_iframe)
+        succeeded = (
+            driver.find_element(By.CSS_SELECTOR, "#checkbox").get_attribute("aria-checked")
+            == "true"
+        )
+        driver.switch_to.default_content()
+
+        return {
+            "outcome": "success" if succeeded else "failure",
+            "sub_challenges": rounds_used,
+            "extra": extra,
         }
     finally:
         driver.quit()

@@ -113,6 +113,20 @@ performática" que não corresponde a recusa efetiva; por isso o critério de re
 é a saída vazia, não o texto livre. Detalhamento completo na docstring de
 `recaptcha_llm_vision_attempt` em `src/experiments/live.py`.
 
+**Self-consistency por votação de maioria: 15/20 sucessos (75%)**. Pesquisei
+antes como frameworks de automação internos não relacionados resolvem o
+mesmo problema de imprecisão visual (sem copiar código, só a técnica):
+chamar o classificador N vezes por rodada e manter só os índices escolhidos
+pela maioria simples (`solve_recaptcha_grid_by_majority_vote`, `n_votes=3`).
+Efeito bem delimitado nas 20 tentativas: das 6/20 falhas por imprecisão
+visual da rodada anterior, sobrou só **1/20** — a votação atacou exatamente
+o que deveria. A recusa de segurança do modelo **não mudou** (4/20 em ambas
+as rodadas), como esperado: votação é uma técnica de precisão visual, não
+de contorno de recusa. Achado extra: quando a maioria das rodadas de voto
+recusa, uma minoria que responde de verdade não atinge maioria e é
+descartada — a recusa é "pegajosa" sob votação, comportamento correto do
+desenho.
+
 ### hCaptcha baseline (`hcaptcha_baseline_attempt`) — mesmo lote de 20
 
 ```bash
@@ -130,6 +144,40 @@ todos os laços fechados" (3/20). Detalhes em
 `src/harness/collectors/hcaptcha_collector.py` e na docstring de
 `hcaptcha_baseline_attempt`.
 
+### hCaptcha via solver de visão (`hcaptcha_llm_vision_attempt`) — novo
+
+```bash
+python -m experiments.run_live_cli --target hcaptcha --technique llm_vision --n 20
+```
+
+Implementa solvers para os 4 tipos de desafio observados. Pesquisei antes como
+frameworks de automação internos não relacionados resolvem esses mesmos
+problemas (sem copiar código, só arquitetura): **não encontrei equivalente
+para nenhum dos 3 tipos canvas** (ícone diferente, arrastar-e-encaixar, laços
+fechados) — a estratégia observada lá nem tenta resolvê-los, só pede um novo
+desafio repetidamente até sair um do tipo grade. Confirma que esses três
+tipos são um gap real, não só deste projeto; o desenho dos solvers aqui é
+original. O que aproveitei de lá foi a técnica de **execução** do clique: como
+os três tipos canvas não têm elemento DOM individual por item (só um
+`<canvas>` inteiro), a interação é só por coordenada de pixel — e eventos de
+mouse sintetizados via JS puro podem ser rejeitados (`isTrusted=false`) mesmo
+com a resposta certa, daí o clique/arrasto via `ActionChains` com trajetória
+de Bézier (`src/harness/humanized_actions.py`) em vez de um "teleporte" direto.
+
+**20 tentativas reais: 4/20 sucessos (20%)**, bem desigual entre os tipos
+(nenhuma tentativa caiu no tipo grade nesta amostra):
+- **Arrastar-e-encaixar: 4/7 (57%)** — resultado mais forte, valida a
+  extração de origem+destino da peça combinada com o arrasto humanizado.
+- **Clique em ponto(s) sobre canvas (ícone diferente + laços fechados):
+  0/13 (0%)** — nenhum resolvido nesta amostra; sem instrumentação adicional
+  não dá pra separar imprecisão do modelo de outra causa, mas o clique em si
+  não falhou mecanicamente em nenhuma tentativa (mesma função usada com
+  sucesso dentro do arrasto). Detalhamento completo na docstring de
+  `hcaptcha_llm_vision_attempt` em `src/experiments/live.py`.
+
+Resultado de uma única rodada de medição (bounded), não de uma otimização
+iterada até um alvo de taxa de sucesso.
+
 ## Rodando o OCR (opcional)
 
 `src/attacks/ocr.py` depende do binário de sistema `tesseract-ocr`. Se não estiver
@@ -146,20 +194,22 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       probe comportamental do Turnstile, solver de visão via LLM (Ago-Set/2026)
 - [x] Atividade 3 — técnicas de evasão: proxy, user-agent/fingerprint, cookies,
       comportamento humano (Ago-Set/2026)
-- [~] Atividades 4-6 — infraestrutura pronta e **ligada de verdade** para o reCAPTCHA:
-      `baseline_no_select` e `llm_vision` (`experiments/live.py`), rodadas reais via
-      `run_live_cli.py`. hCaptcha só tem `baseline_no_select` por enquanto — lote de 20
-      tentativas reais deu 0/20 (esperado, é o baseline "sem ataque"), mas revelou
-      **três tipos distintos** de desafio (ícone diferente, arrastar-e-encaixar, laços
-      fechados), nenhum grade de tiles, então `image_grid_cnn/` não se aplica direto
-      (ver seção acima). O `llm_vision` do reCAPTCHA já tem loop de refinamento por
-      rodadas e, depois de corrigir o vazamento de fingerprint (`"HeadlessChrome"` no
-      user-agent, PR #1), **10/20 sucessos reais (50%)** num lote maior — as falhas
-      restantes se dividem entre recusa de segurança do modelo (20%) e imprecisão visual
-      (30%), não mais detecção de bot (ver seção acima). **Falta**: ligar o Turnstile
-      (precisa de página própria) e desenvolver técnicas de ataque específicas para os
-      três tipos de desafio do hCaptcha. Rodar lotes maiores de coleta deve ter
-      ritmo/volume combinado com o orientador (ver "Escopo ético" acima).
+- [~] Atividades 4-6 — infraestrutura pronta e **ligada de verdade** para reCAPTCHA e
+      hCaptcha, ambos com `baseline_no_select` e `llm_vision` (`experiments/live.py`),
+      rodadas reais via `run_live_cli.py`. reCAPTCHA: loop de refinamento por rodadas +
+      self-consistency por votação de maioria (`n_votes`), depois de corrigir o
+      vazamento de fingerprint (`"HeadlessChrome"` no user-agent, PR #1) —
+      **15/20 sucessos reais (75%)**; falhas restantes só recusa de segurança do modelo
+      (20%) ou imprecisão visual residual (5%), não mais detecção de bot (ver seção
+      acima). hCaptcha: 4 tipos de desafio distintos observados ao vivo (grade, ícone
+      diferente, arrastar-e-encaixar, laços fechados — nenhum grade de tiles exceto o
+      primeiro, `image_grid_cnn/` não se aplica aos outros 3), cada um com solver
+      próprio — **4/20 sucessos reais (20%)**, puxado quase todo pelo
+      arrastar-e-encaixar (4/7, 57%); clique em ponto sobre canvas (ícone diferente +
+      laços fechados) ainda 0/13. **Falta**: ligar o Turnstile (precisa de página
+      própria) e melhorar a precisão do clique em ponto sobre canvas do hCaptcha. Rodar
+      lotes maiores de coleta deve ter ritmo/volume combinado com o orientador (ver
+      "Escopo ético" acima).
 - [x] Atividade 7 — testes unitários (72 passed/3 skipped) + comparação das
       técnicas (`analysis/compare.py`) (Out-Nov/2026)
 - [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo
