@@ -1,4 +1,4 @@
-"""Testes do solver de visão — cliente Anthropic mockado, sem chamadas reais à API."""
+"""Testes do solver de visão — cliente OpenAI mockado, sem chamadas reais à API."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from attacks.llm_vision_solver import (
 )
 
 
-def _fake_client(parsed_output):
+def _fake_client(output_parsed):
     client = MagicMock()
-    client.messages.parse.return_value = MagicMock(parsed_output=parsed_output)
+    client.responses.parse.return_value = MagicMock(output_parsed=output_parsed)
     return client
 
 
@@ -32,18 +32,16 @@ def test_solve_recaptcha_grid_returns_parsed_answer_and_builds_correct_request()
 
     assert result == expected
 
-    call_kwargs = client.messages.parse.call_args.kwargs
-    assert call_kwargs["model"] == "claude-sonnet-5"
-    assert call_kwargs["output_format"] is RecaptchaGridAnswer
-    assert call_kwargs["thinking"] == {"type": "disabled"}
+    call_kwargs = client.responses.parse.call_args.kwargs
+    assert call_kwargs["model"] == "gpt-6.1-terra"
+    assert call_kwargs["text_format"] is RecaptchaGridAnswer
 
-    content = call_kwargs["messages"][0]["content"]
-    assert content[0]["type"] == "image"
-    assert content[0]["source"]["type"] == "base64"
-    assert content[0]["source"]["media_type"] == "image/png"
-    assert content[1]["type"] == "text"
-    assert "ônibus" in content[1]["text"]
-    assert "3x3" in content[1]["text"]
+    content = call_kwargs["input"][0]["content"]
+    assert content[0]["type"] == "input_text"
+    assert "ônibus" in content[0]["text"]
+    assert "3x3" in content[0]["text"]
+    assert content[1]["type"] == "input_image"
+    assert content[1]["image_url"].startswith("data:image/png;base64,")
 
 
 def test_solve_puzzle_piece_returns_parsed_answer_and_builds_correct_request():
@@ -58,9 +56,9 @@ def test_solve_puzzle_piece_returns_parsed_answer_and_builds_correct_request():
 
     assert result == expected
 
-    call_kwargs = client.messages.parse.call_args.kwargs
-    assert call_kwargs["output_format"] is PuzzlePieceAnswer
+    call_kwargs = client.responses.parse.call_args.kwargs
+    assert call_kwargs["text_format"] is PuzzlePieceAnswer
 
-    content = call_kwargs["messages"][0]["content"]
-    assert content[0]["type"] == "image"
-    assert "arrastar-e-encaixar" in content[1]["text"]
+    content = call_kwargs["input"][0]["content"]
+    assert "arrastar-e-encaixar" in content[0]["text"]
+    assert content[1]["type"] == "input_image"

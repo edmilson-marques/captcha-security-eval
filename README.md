@@ -56,12 +56,14 @@ Cada amostra é salva em `data/raw/<alvo>/<timestamp>/` (screenshot, HTML e meta
 ## Solver de visão via LLM (opcional, custo real)
 
 `src/attacks/llm_vision_solver.py` implementa uma técnica alternativa de IA: envia o
-screenshot do desafio + a instrução para um modelo multimodal da Anthropic e recebe de
-volta uma resposta estruturada (índices de tiles, ou coordenadas de um puzzle). Requer
-`ANTHROPIC_API_KEY` no ambiente — **não incluída no repositório, e não testada ao vivo**
-(sem chave disponível na sessão em que foi escrita; os testes usam um cliente mockado).
-Custo real por chamada — ver docstring do módulo para o modelo escolhido e a estimativa.
-Antes de usar em experimentos de verdade, validar manualmente contra amostras reais.
+screenshot do desafio + a instrução para um modelo multimodal da OpenAI (Responses API,
+`gpt-6.1-terra`) e recebe de volta uma resposta estruturada (índices de tiles, ou
+coordenadas de um puzzle). Requer `OPENAI_API_KEY` no ambiente — **não incluída no
+repositório, e não testada ao vivo** (sem chave disponível na sessão em que foi escrita;
+os testes usam um cliente mockado, mas o formato exato da chamada foi confirmado contra
+o SDK `openai` instalado de verdade). Custo real por chamada — ver docstring do módulo
+para o modelo escolhido e a estimativa. Antes de usar em experimentos de verdade, validar
+manualmente contra amostras reais.
 
 ## Rodando o OCR (opcional)
 
