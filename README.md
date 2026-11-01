@@ -242,7 +242,7 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       mais forte ou outro pré-processamento de imagem para o clique-sobre-canvas. Rodar
       lotes maiores de coleta deve ter ritmo/volume combinado com o orientador (ver
       "Escopo ético" acima).
-- [x] Atividade 7 — testes unitários (72 passed/3 skipped) + comparação das
+- [x] Atividade 7 — testes unitários (89 passed/3 skipped) + comparação das
       técnicas (`analysis/compare.py`) (Out-Nov/2026)
 - [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo
       mudanças de DOM/bloqueios durante a coleta real — Out-Nov/2026)
