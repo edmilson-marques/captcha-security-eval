@@ -178,6 +178,23 @@ de Bézier (`src/harness/humanized_actions.py`) em vez de um "teleporte" direto.
 Resultado de uma única rodada de medição (bounded), não de uma otimização
 iterada até um alvo de taxa de sucesso.
 
+**Tentativa de melhorar o clique-sobre-canvas: não subiu.** A pedido do
+usuário, troquei para `solve_canvas_points_by_consensus` — mesma técnica de
+self-consistency que deu +25pp no reCAPTCHA, adaptada para coordenada
+contínua via clustering espacial em vez de maioria exata de índice. Mais 20
+tentativas reais: **5/20 (25%)** no total, mas **clique-sobre-canvas
+continuou em 0/10 (0%)** — a melhora do agregado foi só variação amostral no
+arrastar-e-encaixar. Achado no processo: uma recusa do modelo pode fazer
+`solve_canvas_points` retornar `None` (não `points=[]` como a recusa da
+grade) — corrigido para não derrubar a votação. Com **0/23** cliques-sobre-
+canvas bem-sucedidos na sessão inteira (antes e depois do consenso), a causa
+provavelmente não é só ruído pontual do modelo (votação deveria destravar
+pelo menos alguns casos, como fez na grade) — fica em aberto se é um limite
+de precisão visual sistemático do modelo para esses dois tipos ou uma
+exigência de interação mais estrita do hCaptcha que só instrumentação a
+nível de evento JS no iframe do desafio confirmaria. Detalhamento completo
+na docstring de `hcaptcha_llm_vision_attempt`.
+
 ## Rodando o OCR (opcional)
 
 `src/attacks/ocr.py` depende do binário de sistema `tesseract-ocr`. Se não estiver
@@ -204,12 +221,14 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       acima). hCaptcha: 4 tipos de desafio distintos observados ao vivo (grade, ícone
       diferente, arrastar-e-encaixar, laços fechados — nenhum grade de tiles exceto o
       primeiro, `image_grid_cnn/` não se aplica aos outros 3), cada um com solver
-      próprio — **4/20 sucessos reais (20%)**, puxado quase todo pelo
-      arrastar-e-encaixar (4/7, 57%); clique em ponto sobre canvas (ícone diferente +
-      laços fechados) ainda 0/13. **Falta**: ligar o Turnstile (precisa de página
-      própria) e melhorar a precisão do clique em ponto sobre canvas do hCaptcha. Rodar
-      lotes maiores de coleta deve ter ritmo/volume combinado com o orientador (ver
-      "Escopo ético" acima).
+      próprio — puxado quase todo pelo arrastar-e-encaixar (9/15 nas duas rodadas, ~60%);
+      clique em ponto sobre canvas (ícone diferente + laços fechados) ficou em **0/23**
+      mesmo depois de tentar self-consistency por consenso espacial (mesma técnica que
+      funcionou na grade do reCAPTCHA) — não subiu, ver seção acima para a análise.
+      **Falta**: ligar o Turnstile (precisa de página própria) e investigar o
+      clique-sobre-canvas a nível de evento JS para distinguir limite de precisão do
+      modelo de exigência de interação do hCaptcha. Rodar lotes maiores de coleta deve
+      ter ritmo/volume combinado com o orientador (ver "Escopo ético" acima).
 - [x] Atividade 7 — testes unitários (72 passed/3 skipped) + comparação das
       técnicas (`analysis/compare.py`) (Out-Nov/2026)
 - [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo

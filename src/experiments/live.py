@@ -36,7 +36,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 
 from attacks.llm_vision_solver import (
-    solve_canvas_points,
+    solve_canvas_points_by_consensus,
     solve_puzzle_piece,
     solve_recaptcha_grid_by_majority_vote,
 )
@@ -437,7 +437,8 @@ def hcaptcha_llm_vision_attempt(
       sintetizado em JS).
     - **Clique em ponto(s) sobre canvas** (qualquer outro prompt — cobre
       "ícone diferente" e "laços fechados", ambos também renderizados só em
-      `<canvas>`): `solve_canvas_points` devolve 1 ou mais coordenadas, cada
+      `<canvas>`): `solve_canvas_points_by_consensus` (self-consistency por
+      clustering espacial, `n_votes`) devolve 1 ou mais coordenadas, cada
       uma clicada via `harness.humanized_actions.click_canvas_point`.
 
     **Por que não dá pra usar seletor CSS por item nos três tipos acima**:
@@ -490,6 +491,41 @@ def hcaptcha_llm_vision_attempt(
     Isto é o resultado de uma única rodada de medição (bounded, como
     combinado) depois de implementar os solvers — não uma otimização
     iterada até um alvo de taxa de sucesso.
+
+    **Tentativa de melhorar o clique-sobre-canvas (2026-11-01, pedido
+    explícito do usuário): não subiu.** Troquei `solve_canvas_points` por
+    `solve_canvas_points_by_consensus` (mesmo princípio de self-consistency
+    que funcionou bem na grade do reCAPTCHA — ver
+    `recaptcha_llm_vision_attempt` — mas adaptado a coordenada contínua via
+    clustering espacial em vez de maioria exata de índice). Resultado de mais
+    20 tentativas reais: **5/20 (25%)** no total, mas **clique-sobre-canvas
+    continuou em 0/10 (0%)** — a melhora no agregado veio só de variação
+    amostral no arrastar-e-encaixar (5/8 nesta rodada vs. 4/7 antes, dentro
+    do ruído esperado para N pequeno). Ou seja, a técnica testada **não
+    resolveu** o problema do clique-sobre-canvas.
+
+    Achado relevante no processo: a votação encontrou um caso real de recusa
+    em que `solve_canvas_points` retornou `None` (não `points=[]` como a
+    recusa do solver de grade) — corrigido em
+    `solve_canvas_points_by_consensus` para tratar isso como mais uma falha
+    de rodada tolerável, não um crash.
+
+    Com 0/23 tentativas reais de clique-sobre-canvas bem-sucedidas no total
+    da sessão (13 antes + 10 depois do consenso), a taxa é baixa demais pra
+    ser só ruído de imprecisão pontual do modelo — se fosse só isso, a
+    votação (que ataca exatamente esse tipo de ruído, como provou fazer na
+    grade) deveria ter destravado pelo menos alguns casos. Duas explicações
+    permanecem em aberto e eu não investiguei nenhuma a fundo (ficaria para
+    uma próxima rodada, se o usuário pedir): (a) o critério visual em si é
+    mais difícil para o modelo nesses dois tipos — diferença sutil entre
+    ícones, identificar todos os laços fechados sem errar a contagem — a
+    ponto de o modelo errar de forma consistente (não aleatória) entre
+    chamadas, o que votação por maioria não resolve; ou (b) hCaptcha pode
+    exigir uma tolerância de acerto mais estreita e/ou uma sequência de
+    eventos de clique mais específica para esse tipo de desafio do que para
+    o arrastar-e-encaixar (que tem alguma tolerância de "encaixe"), algo que
+    só uma instrumentação ao nível de evento JS no iframe do desafio
+    conseguiria confirmar ou descartar.
     """
     driver = build_driver(BrowserConfig(headless=headless))
     try:
@@ -584,7 +620,9 @@ def hcaptcha_llm_vision_attempt(
                     }
                 )
             else:
-                click_answer = solve_canvas_points(screenshot_png=screenshot, instruction=prompt)
+                click_answer = solve_canvas_points_by_consensus(
+                    screenshot_png=screenshot, instruction=prompt, n_votes=n_votes
+                )
                 for point in click_answer.points:
                     click_canvas_point(driver, canvas, (point.x, point.y), canvas_wh)
                     time.sleep(0.3)

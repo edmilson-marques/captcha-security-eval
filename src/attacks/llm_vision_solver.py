@@ -43,7 +43,11 @@ verdade via `harness/humanized_actions.py`; `solve_recaptcha_grid_by_majority_vo
 reduz imprecisão visual chamando o classificador N vezes e combinando por
 maioria simples, técnica equivalente à usada em frameworks de automação
 internos não relacionados a este projeto (pesquisa conceitual, sem copiar
-código).
+código). `solve_canvas_points_by_consensus` tenta a mesma ideia adaptada pra
+coordenada contínua (clustering espacial em vez de maioria exata) — **testado
+ao vivo em 2026-11-01 e não melhorou a taxa de sucesso de clique-sobre-canvas
+(0/10, igual a antes do consenso)**, ver docstring de
+`experiments.live.hcaptcha_llm_vision_attempt` para a discussão completa.
 """
 
 from __future__ import annotations
@@ -257,6 +261,98 @@ def solve_canvas_points(
         text_format=CanvasPointsAnswer,
     )
     return response.output_parsed
+
+
+def solve_canvas_points_by_consensus(
+    screenshot_png: bytes,
+    instruction: str,
+    n_votes: int = 3,
+    cluster_radius: float = 40.0,
+    client: OpenAI | None = None,
+) -> CanvasPointsAnswer:
+    """Chama `solve_canvas_points` `n_votes` vezes e combina por consenso espacial.
+
+    Mesmo princípio de `solve_recaptcha_grid_by_majority_vote` (self-
+    consistency: várias chamadas do mesmo classificador, maioria simples
+    decide), mas adaptado para coordenadas de pixel contínuas em vez de
+    índices discretos de tile — duas chamadas raramente concordam pixel a
+    pixel, então "maioria exata" não funcionaria aqui. Em vez disso:
+
+    1. Junta todos os pontos de todas as rodadas válidas numa lista só.
+    2. Agrupa por proximidade: cada ponto entra no primeiro cluster cujo
+       centróide atual esteja a até `cluster_radius` pixels de distância;
+       senão vira um cluster novo (clustering guloso de passagem única,
+       suficiente aqui — não precisa de k-means, os cliques tendem a vir bem
+       separados ou bem próximos, sem caso ambíguo no meio).
+    3. Mantém só os clusters com suporte de **mais da metade** das rodadas
+       válidas (mesmo critério de maioria da votação de grade) e devolve o
+       centróide de cada um como o ponto final.
+
+    Tolerante a falha parcial (mesmo comportamento de
+    `solve_recaptcha_grid_by_majority_vote`): se uma chamada falhar, a
+    votação segue com as demais; só propaga o erro se todas falharem.
+    `n_votes=1` desliga o consenso (chamada única, sem custo extra).
+
+    **Achado ao vivo em 2026-11-01**: ao contrário da recusa de segurança
+    observada em `solve_recaptcha_grid` (que preenche o schema com
+    `tile_indices=[]` em vez de quebrar), uma recusa em `solve_canvas_points`
+    às vezes faz `response.output_parsed` vir `None` (o modelo não preenche o
+    schema de jeito nenhum) — descoberto porque uma rodada real quebrou com
+    `'NoneType' object has no attribute 'points'`. Tratado aqui como mais uma
+    forma de falha de rodada (mesmo balde dos erros de API), não uma falha
+    fatal da função inteira.
+    """
+    if n_votes < 1:
+        raise ValueError("n_votes deve ser >= 1.")
+
+    answers: list[CanvasPointsAnswer] = []
+    last_error: Exception | None = None
+    for _ in range(n_votes):
+        try:
+            answer = solve_canvas_points(
+                screenshot_png=screenshot_png, instruction=instruction, client=client
+            )
+            if answer is None:
+                raise ValueError(
+                    "solve_canvas_points retornou None (provável recusa do "
+                    "modelo sem preencher o schema)"
+                )
+            answers.append(answer)
+        except Exception as exc:  # noqa: BLE001 - qualquer rodada pode falhar isoladamente
+            last_error = exc
+
+    if not answers:
+        assert last_error is not None
+        raise last_error
+
+    clusters: list[list[tuple[int, int]]] = []
+    for answer in answers:
+        for point in answer.points:
+            pt = (point.x, point.y)
+            match = None
+            for cluster in clusters:
+                centroid_x = sum(p[0] for p in cluster) / len(cluster)
+                centroid_y = sum(p[1] for p in cluster) / len(cluster)
+                distance = ((pt[0] - centroid_x) ** 2 + (pt[1] - centroid_y) ** 2) ** 0.5
+                if distance <= cluster_radius:
+                    match = cluster
+                    break
+            if match is not None:
+                match.append(pt)
+            else:
+                clusters.append([pt])
+
+    majority_threshold = len(answers) / 2
+    winning_points = [
+        CanvasPoint(
+            x=round(sum(p[0] for p in cluster) / len(cluster)),
+            y=round(sum(p[1] for p in cluster) / len(cluster)),
+        )
+        for cluster in clusters
+        if len(cluster) > majority_threshold
+    ]
+    combined_reasoning = " | ".join(answer.reasoning for answer in answers)
+    return CanvasPointsAnswer(points=winning_points, reasoning=combined_reasoning)
 
 
 def solve_recaptcha_grid_by_majority_vote(
