@@ -11,6 +11,7 @@ from attacks.llm_vision_solver import (
     RecaptchaGridAnswer,
     _strip_ui_instructions,
     solve_canvas_points,
+    solve_canvas_points_by_consensus,
     solve_puzzle_piece,
     solve_recaptcha_grid,
     solve_recaptcha_grid_by_majority_vote,
@@ -205,4 +206,107 @@ def test_solve_recaptcha_grid_by_majority_vote_single_vote_matches_plain_call():
     )
 
     assert result.tile_indices == [0, 1]
+    assert client.responses.parse.call_count == 1
+
+
+def test_solve_canvas_points_by_consensus_keeps_only_clusters_with_majority_support():
+    answers = [
+        CanvasPointsAnswer(points=[CanvasPoint(x=100, y=100)], reasoning="voto 1"),
+        CanvasPointsAnswer(points=[CanvasPoint(x=110, y=95)], reasoning="voto 2"),
+        CanvasPointsAnswer(points=[CanvasPoint(x=400, y=400)], reasoning="voto 3"),
+    ]
+    client = MagicMock()
+    client.responses.parse.side_effect = [MagicMock(output_parsed=a) for a in answers]
+
+    result = solve_canvas_points_by_consensus(
+        screenshot_png=b"fake-png-bytes",
+        instruction="Clique no ícone que é diferente",
+        n_votes=3,
+        client=client,
+    )
+
+    # (100,100) e (110,95) estão a <15px um do outro -> mesmo cluster, 2/3 votos -> maioria.
+    # (400,400) é um cluster isolado com só 1/3 voto -> descartado.
+    assert len(result.points) == 1
+    assert result.points[0].x == round((100 + 110) / 2)
+    assert result.points[0].y == round((100 + 95) / 2)
+    assert client.responses.parse.call_count == 3
+
+
+def test_solve_canvas_points_by_consensus_handles_multiple_surviving_clusters():
+    answers = [
+        CanvasPointsAnswer(
+            points=[CanvasPoint(x=50, y=50), CanvasPoint(x=300, y=300)], reasoning="voto 1"
+        ),
+        CanvasPointsAnswer(
+            points=[CanvasPoint(x=56, y=48), CanvasPoint(x=306, y=296)], reasoning="voto 2"
+        ),
+    ]
+    client = MagicMock()
+    client.responses.parse.side_effect = [MagicMock(output_parsed=a) for a in answers]
+
+    result = solve_canvas_points_by_consensus(
+        screenshot_png=b"fake-png-bytes",
+        instruction="Clique em todos os laços fechados",
+        n_votes=2,
+        client=client,
+    )
+
+    points = {(p.x, p.y) for p in result.points}
+    assert points == {(53, 49), (303, 298)}
+
+
+def test_solve_canvas_points_by_consensus_tolerates_partial_failures():
+    good_answer = CanvasPointsAnswer(points=[CanvasPoint(x=10, y=20)], reasoning="voto bom")
+    client = MagicMock()
+    client.responses.parse.side_effect = [
+        RuntimeError("falha transitória da API"),
+        MagicMock(output_parsed=good_answer),
+    ]
+
+    result = solve_canvas_points_by_consensus(
+        screenshot_png=b"fake-png-bytes",
+        instruction="Clique no ícone que é diferente",
+        n_votes=2,
+        client=client,
+    )
+
+    # só 1 resposta válida de 2 rodadas -> maioria exige > 0.5, 1 voto já basta.
+    assert len(result.points) == 1
+    assert (result.points[0].x, result.points[0].y) == (10, 20)
+
+
+def test_solve_canvas_points_by_consensus_tolerates_none_response():
+    # Achado ao vivo: uma recusa pode fazer output_parsed vir None (em vez de
+    # um CanvasPointsAnswer com points=[]) — não deve derrubar a votação.
+    good_answer = CanvasPointsAnswer(points=[CanvasPoint(x=30, y=40)], reasoning="voto bom")
+    client = MagicMock()
+    client.responses.parse.side_effect = [
+        MagicMock(output_parsed=None),
+        MagicMock(output_parsed=good_answer),
+    ]
+
+    result = solve_canvas_points_by_consensus(
+        screenshot_png=b"fake-png-bytes",
+        instruction="Clique no ícone que é diferente",
+        n_votes=2,
+        client=client,
+    )
+
+    assert len(result.points) == 1
+    assert (result.points[0].x, result.points[0].y) == (30, 40)
+
+
+def test_solve_canvas_points_by_consensus_single_vote_matches_plain_call():
+    expected = CanvasPointsAnswer(points=[CanvasPoint(x=7, y=8)], reasoning="só um voto")
+    client = _fake_client(expected)
+
+    result = solve_canvas_points_by_consensus(
+        screenshot_png=b"fake-png-bytes",
+        instruction="Clique no ícone que é diferente",
+        n_votes=1,
+        client=client,
+    )
+
+    assert (result.points[0].x, result.points[0].y) == (7, 8)
     assert client.responses.parse.call_count == 1
