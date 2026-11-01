@@ -53,6 +53,16 @@ python -m harness.collect_cli --target turnstile --url https://<sua-pagina-de-te
 
 Cada amostra é salva em `data/raw/<alvo>/<timestamp>/` (screenshot, HTML e metadados).
 
+## Solver de visão via LLM (opcional, custo real)
+
+`src/attacks/llm_vision_solver.py` implementa uma técnica alternativa de IA: envia o
+screenshot do desafio + a instrução para um modelo multimodal da Anthropic e recebe de
+volta uma resposta estruturada (índices de tiles, ou coordenadas de um puzzle). Requer
+`ANTHROPIC_API_KEY` no ambiente — **não incluída no repositório, e não testada ao vivo**
+(sem chave disponível na sessão em que foi escrita; os testes usam um cliente mockado).
+Custo real por chamada — ver docstring do módulo para o modelo escolhido e a estimativa.
+Antes de usar em experimentos de verdade, validar manualmente contra amostras reais.
+
 ## Rodando o OCR (opcional)
 
 `src/attacks/ocr.py` depende do binário de sistema `tesseract-ocr`. Se não estiver
@@ -66,7 +76,7 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
 
 - [x] Atividade 1 — ambiente de testes + coletores (Ago/2026)
 - [x] Atividade 2 — módulos de ataque: CV clássica, OCR, CNN de grade de imagem,
-      probe comportamental do Turnstile (Ago-Set/2026)
+      probe comportamental do Turnstile, solver de visão via LLM (Ago-Set/2026)
 - [x] Atividade 3 — técnicas de evasão: proxy, user-agent/fingerprint, cookies,
       comportamento humano (Ago-Set/2026)
 - [~] Atividades 4-6 — **infraestrutura pronta** (`experiments/runner.py` +

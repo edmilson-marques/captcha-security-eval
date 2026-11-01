@@ -15,3 +15,7 @@ torchvision>=0.19
 pandas>=2.2
 matplotlib>=3.9
 scipy>=1.13
+
+# Técnica de visão via LLM (Atividade 2)
+anthropic>=0.88
+pydantic>=2.9
