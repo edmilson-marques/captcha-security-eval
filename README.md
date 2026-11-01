@@ -65,11 +65,22 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
 ## Status
 
 - [x] Atividade 1 — ambiente de testes + coletores (Ago/2026)
-- [x] Atividade 2 — módulos de ataque: CV clássica, OCR, CNN de grade de imagem
-      (Ago-Set/2026). Falta apenas `turnstile_behavioral.py`, que depende do
-      runner de experimentos (Atividade 6).
-- [ ] Atividade 3 — técnicas de evasão (Ago-Set/2026)
-- [ ] Atividades 4-6 — execução dos experimentos por alvo (Set-Out/2026)
-- [ ] Atividade 7 — testes unitários completos + comparação das técnicas (Out-Nov/2026)
-- [ ] Atividade 8 — manutenção do pipeline (Out-Nov/2026)
-- [ ] Atividade 9 — relatório comparativo consolidado (Nov/2026)
+- [x] Atividade 2 — módulos de ataque: CV clássica, OCR, CNN de grade de imagem,
+      probe comportamental do Turnstile (Ago-Set/2026)
+- [x] Atividade 3 — técnicas de evasão: proxy, user-agent/fingerprint, cookies,
+      comportamento humano (Ago-Set/2026)
+- [~] Atividades 4-6 — **infraestrutura pronta** (`experiments/runner.py` +
+      `experiments/metrics.py`, testável por injeção de dependência, sem rede).
+      **Falta**: ligar um `attempt_fn` de verdade por (alvo, técnica) — isto é,
+      abrir o navegador real contra a demo, aplicar a técnica/evasão e
+      interpretar o resultado — e então rodar os lotes de coleta em si contra
+      Google/hCaptcha/Cloudflare. Isso é trabalho exploratório ao vivo (a
+      estrutura do DOM de cada desafio só se confirma inspecionando a página
+      de verdade) e deve ser feito com ritmo/volume combinado com o orientador
+      (ver "Escopo ético" acima) — não foi automatizado sem supervisão.
+- [x] Atividade 7 — testes unitários (72 passed/3 skipped) + comparação das
+      técnicas (`analysis/compare.py`) (Out-Nov/2026)
+- [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo
+      mudanças de DOM/bloqueios durante a coleta real — Out-Nov/2026)
+- [x] Atividade 9 — relatório comparativo consolidado (`analysis/report.py`,
+      tabela LaTeX + gráfico por alvo) (Nov/2026)
