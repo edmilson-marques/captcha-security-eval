@@ -9,12 +9,19 @@ das demais em `src/attacks/`: não precisa de dados de treino próprios, mas
 depende de uma API paga externa.
 
 Usa a API da OpenAI (Responses API). **Requer `OPENAI_API_KEY`** no
-ambiente — não incluída neste repositório. **Não foi validada ao vivo nesta
-sessão** (sem chave de API disponível) — os testes
-(`tests/test_llm_vision_solver.py`) usam um cliente OpenAI mockado, cobrindo
-o contrato da chamada, não a qualidade real das respostas do modelo. Antes
-de usar em experimentos de verdade, validar manualmente contra amostras
-reais coletadas em `data/raw/`.
+ambiente — não incluída neste repositório.
+
+**Validado ao vivo em 2026-11-01** contra uma amostra real coletada em
+`data/raw/recaptcha/20261101T190501120789/challenge.png` (desafio "selecione
+os quadrados com motocicletas", grade 4x4): `solve_recaptcha_grid` retornou
+`tile_indices=[5, 6, 9, 10]`, que bate exatamente com a área ocupada pela
+motocicleta na imagem (conferido visualmente, de forma independente, como
+gabarito). Custo medido da chamada: 516 tokens de entrada + 117 de saída
+(80 deles de raciocínio interno do modelo) = **US$0,0011** — abaixo da
+estimativa inicial. Os testes automatizados
+(`tests/test_llm_vision_solver.py`) continuam usando um cliente OpenAI
+mockado (não fazem chamada real/paga a cada execução da suíte); a validação
+ao vivo acima foi manual, documentada aqui em vez de virar teste automatizado.
 
 **Escolha de modelo** (confirmado em 2026-11-01 via
 developers.openai.com/api/docs/pricing e /docs/models): `gpt-6.1-terra`
@@ -24,11 +31,7 @@ entrada/saída, bom equilíbrio custo-precisão, com janela de contexto de
 é uma alternativa ainda mais barata — vale testar se a precisão compensa a
 economia, especialmente para o caso mais simples (classificação de grade,
 sem coordenadas geométricas finas). `gpt-6-astra` (flagship, US$10/US$50)
-fica reservado para o caso de `terra` não ter precisão suficiente. Custo
-estimado por tentativa (screenshot pequeno de ~300-500px recortado só na
-área do desafio + prompt curto): da ordem de poucos milésimos de dólar por
-chamada — meça com um teste real contra as amostras do projeto antes de
-rodar em lote.
+fica reservado para o caso de `terra` não ter precisão suficiente.
 """
 
 from __future__ import annotations

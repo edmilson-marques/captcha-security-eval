@@ -53,17 +53,20 @@ python -m harness.collect_cli --target turnstile --url https://<sua-pagina-de-te
 
 Cada amostra é salva em `data/raw/<alvo>/<timestamp>/` (screenshot, HTML e metadados).
 
-## Solver de visão via LLM (opcional, custo real)
+## Solver de visão via LLM (custo real, já validado ao vivo)
 
 `src/attacks/llm_vision_solver.py` implementa uma técnica alternativa de IA: envia o
 screenshot do desafio + a instrução para um modelo multimodal da OpenAI (Responses API,
 `gpt-6.1-terra`) e recebe de volta uma resposta estruturada (índices de tiles, ou
-coordenadas de um puzzle). Requer `OPENAI_API_KEY` no ambiente — **não incluída no
-repositório, e não testada ao vivo** (sem chave disponível na sessão em que foi escrita;
-os testes usam um cliente mockado, mas o formato exato da chamada foi confirmado contra
-o SDK `openai` instalado de verdade). Custo real por chamada — ver docstring do módulo
-para o modelo escolhido e a estimativa. Antes de usar em experimentos de verdade, validar
-manualmente contra amostras reais.
+coordenadas de um puzzle). Requer `OPENAI_API_KEY` no ambiente (ex. num `.env` na raiz do
+projeto, já coberto pelo `.gitignore` — nunca commitar a chave).
+
+**Validado ao vivo em 2026-11-01** contra a amostra real
+`data/raw/recaptcha/20261101T190501120789/challenge.png` ("selecione os quadrados com
+motocicletas", grade 4x4): resposta `[5, 6, 9, 10]`, correta (conferida visualmente),
+custo real **US$0,0011 por chamada**. Os testes automatizados continuam usando um cliente
+mockado (não fazem chamada paga a cada execução da suíte) — a validação ao vivo foi
+manual, ver docstring do módulo.
 
 ## Rodando o OCR (opcional)
 
