@@ -168,8 +168,38 @@ def recaptcha_llm_vision_attempt(
     não teria — achado relevante para a comparação do estudo entre técnicas.
     A recusa pareceu probabilística (não ocorreu em todas as tentativas),
     condizente com o comportamento típico de classificadores de segurança de
-    LLM. Não investiguei mitigação (ex. reformular o prompt) — fica como
-    próximo passo caso o orientador considere relevante.
+    LLM. Cogitei mitigar reformulando o prompt para reduzir a recusa, mas essa
+    ação específica (engenharia de prompt para contornar o guardrail de
+    segurança de *outro* provedor de IA) foi bloqueada pelo classificador de
+    segurança do próprio Claude Code; coerente com essa decisão, optei por só
+    remover ruído de interface do texto da instrução (`_strip_ui_instructions`
+    em `attacks/llm_vision_solver.py` — ex. "Clique em Confirmar..." —, sem
+    tocar na palavra "CAPTCHA" nem na moldura da tarefa).
+
+    **Com a limpeza de ruído de UI** (5 tentativas reais em 2026-11-01, ainda
+    0/5): 2 recusas de segurança e 3 respostas reais (sem recusa) que o loop
+    convergiu corretamente mas ainda assim falharam — inspeção visual rodada
+    a rodada confirmou que o loop está correto mesmo numa grade 3x3 que se
+    revelou **estática** (corrigindo a generalização anterior de que grade
+    3x3 implicava sempre grade dinâmica). Isso motivou investigar detecção de
+    bot independente da resposta: `navigator.webdriver` já estava suprimido
+    (`False`), mas `navigator.userAgent` continha literalmente
+    `"HeadlessChrome"` — sinal de automação trivial, plausivelmente a causa
+    dominante do 0% de sucesso em **todas** as técnicas testadas na sessão
+    até então (ver achado e correção em `harness/browser.py`).
+
+    **Depois de ligar um user-agent real de desktop no harness** (5 tentativas
+    reais em 2026-11-01, mesmo texto de instrução, mesma versão do solver):
+    **2/5 sucessos reais** — salto em relação ao 0/7 acumulado nas duas
+    versões anteriores do loop. Das 3 falhas restantes: 2 foram recusas de
+    segurança (`tile_indices: []`, mesmo texto de recusa de antes) e 1 foi uma
+    resposta real do modelo (grade "faixas de pedestre", `tile_indices=[0,1]`,
+    convergiu em 2 rodadas) que ainda assim foi rejeitada — imprecisão visual
+    residual, não recusa nem bug do loop. Ou seja: com o sinal de
+    automação removido, a causa de falha restante passou a ser,
+    consistentemente, (a) recusa de segurança do modelo comercial ou
+    (b) imprecisão visual — exatamente os dois achados que interessam à
+    comparação do estudo, sem mais o ruído de detecção de bot por cima.
     """
     driver = build_driver(BrowserConfig(headless=headless))
     try:
