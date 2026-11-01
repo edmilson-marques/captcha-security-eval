@@ -1,4 +1,5 @@
 """Fábrica de WebDriver Selenium usada pelos coletores (Atividade 1)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -29,6 +30,11 @@ def build_driver(config: BrowserConfig) -> webdriver.Chrome:
         options.add_argument("--headless=new")
     options.add_argument(f"--window-size={config.window_size[0]},{config.window_size[1]}")
     options.add_argument("--disable-blink-features=AutomationControlled")
+    # Necessário neste ambiente em container (sem isolamento de usuário do
+    # Chrome disponível) — ver docs do Chromium sobre zygote sandbox em
+    # containers/VMs.
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
     if config.user_agent:
         options.add_argument(f"--user-agent={config.user_agent}")
 
