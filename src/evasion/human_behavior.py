@@ -61,3 +61,36 @@ def human_delay(mean: float = 0.3, std: float = 0.1, minimum: float = 0.05) -> f
     """
     sample = random.gauss(mean, std)
     return max(sample, minimum)
+
+
+def canvas_offset_path(
+    canvas_size: tuple[int, int],
+    start_point: tuple[float, float],
+    end_point: tuple[float, float],
+    n_points: int = 14,
+    jitter: float = 8.0,
+) -> list[tuple[float, float]]:
+    """Converte dois pontos em coordenada de imagem numa trajetória de *offsets*.
+
+    `start_point`/`end_point` são coordenadas de pixel relativas ao canto
+    superior esquerdo do canvas (o mesmo sistema de coordenadas usado pelos
+    solvers de `attacks/llm_vision_solver.py` e pela captura de screenshot do
+    elemento). O Selenium `ActionChains.move_to_element_with_offset`/
+    `move_by_offset`, porém, trabalha com offsets relativos ao **centro** do
+    elemento (ver `selenium.webdriver.common.action_chains`) — esta função já
+    faz essa conversão e devolve a trajetória pronta para ser percorrida em
+    `harness/humanized_actions.py`.
+
+    Achado que motivou isto: pesquisa conceitual em frameworks de automação
+    (não copiados, só arquitetura) mostra que alguns motores de risco de
+    CAPTCHA rejeitam eventos de mouse sintetizados via JS puro
+    (`isTrusted=false`) mesmo quando a resposta está correta — cliques devem
+    vir de um caminho de entrada "confiável" (via ActionChains/CDP) e, de
+    preferência, seguir uma trajetória não-linear (ver `bezier_mouse_path`)
+    em vez de teleportar direto ao alvo, que é por si só um sinal de
+    automação ingênua.
+    """
+    canvas_width, canvas_height = canvas_size
+    start_offset = (start_point[0] - canvas_width / 2, start_point[1] - canvas_height / 2)
+    end_offset = (end_point[0] - canvas_width / 2, end_point[1] - canvas_height / 2)
+    return bezier_mouse_path(start_offset, end_offset, n_points=n_points, jitter=jitter)
