@@ -117,6 +117,112 @@ def test_run_experiment_same_round_shares_one_file(tmp_path):
     assert len(lines) == 3
 
 
+def test_run_experiment_pauses_after_every_n_attempts(tmp_path):
+    def attempt_fn() -> dict:
+        return {"outcome": "success"}
+
+    sleep_calls = []
+
+    run_experiment(
+        target="hcaptcha",
+        technique="classical_cv",
+        evasion_profile="none",
+        n_attempts=25,
+        attempt_fn=attempt_fn,
+        results_dir=tmp_path,
+        pause_every=10,
+        pause_seconds=5.0,
+        sleep_fn=sleep_calls.append,
+    )
+
+    # 25 tentativas, pausa a cada 10 completadas -> pausa depois da 10ª e da
+    # 20ª, mas NÃO depois da 25ª (última tentativa, nada a esperar).
+    assert sleep_calls == [5.0, 5.0]
+
+
+def test_run_experiment_pause_every_none_never_pauses(tmp_path):
+    def attempt_fn() -> dict:
+        return {"outcome": "success"}
+
+    sleep_calls = []
+
+    run_experiment(
+        target="hcaptcha",
+        technique="classical_cv",
+        evasion_profile="none",
+        n_attempts=30,
+        attempt_fn=attempt_fn,
+        results_dir=tmp_path,
+        pause_every=None,
+        sleep_fn=sleep_calls.append,
+    )
+
+    assert sleep_calls == []
+
+
+def test_run_experiment_pause_applies_even_after_failed_attempt(tmp_path):
+    def attempt_fn() -> dict:
+        raise RuntimeError("falha simulada")
+
+    sleep_calls = []
+
+    run_experiment(
+        target="hcaptcha",
+        technique="classical_cv",
+        evasion_profile="none",
+        n_attempts=10,
+        attempt_fn=attempt_fn,
+        results_dir=tmp_path,
+        pause_every=5,
+        pause_seconds=2.0,
+        sleep_fn=sleep_calls.append,
+    )
+
+    # Pausa conta tentativas COMPLETADAS (sucesso ou falha), não só sucessos.
+    assert sleep_calls == [2.0]
+
+
+def test_run_experiment_on_pause_called_before_each_pause(tmp_path):
+    def attempt_fn() -> dict:
+        return {"outcome": "success"}
+
+    pause_events = []
+
+    run_experiment(
+        target="hcaptcha",
+        technique="classical_cv",
+        evasion_profile="none",
+        n_attempts=22,
+        attempt_fn=attempt_fn,
+        results_dir=tmp_path,
+        pause_every=10,
+        sleep_fn=lambda _seconds: None,
+        on_pause=lambda done, total: pause_events.append((done, total)),
+    )
+
+    assert pause_events == [(10, 22), (20, 22)]
+
+
+def test_run_experiment_n_attempts_below_pause_every_never_pauses(tmp_path):
+    def attempt_fn() -> dict:
+        return {"outcome": "success"}
+
+    sleep_calls = []
+
+    run_experiment(
+        target="hcaptcha",
+        technique="classical_cv",
+        evasion_profile="none",
+        n_attempts=3,
+        attempt_fn=attempt_fn,
+        results_dir=tmp_path,
+        pause_every=10,
+        sleep_fn=sleep_calls.append,
+    )
+
+    assert sleep_calls == []
+
+
 def test_run_pass_rate_probe_without_navigate_fn_does_not_raise(tmp_path):
     results = run_pass_rate_probe(
         evasion_profile="none",
