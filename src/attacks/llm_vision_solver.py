@@ -48,6 +48,17 @@ coordenada contínua (clustering espacial em vez de maioria exata) — **testado
 ao vivo em 2026-11-01 e não melhorou a taxa de sucesso de clique-sobre-canvas
 (0/10, igual a antes do consenso)**, ver docstring de
 `experiments.live.hcaptcha_llm_vision_attempt` para a discussão completa.
+
+**Ciclo de diagnóstico estruturado em 2026-11-02** (3 correções testadas ao
+vivo): `criterion_type` em `solve_canvas_points` seleciona um prompt
+especializado por natureza da tarefa (`icon_outlier`/`closed_loop`, com
+raciocínio estruturado) em vez do prompt genérico único; `elements_considered`
+foi adicionado ao schema só para auditoria. Nenhuma das correções (captura
+de imagem em resolução nativa, prompt estruturado, nem — numa 2ª rodada —
+um prompt nomeando explicitamente "quebra de camuflagem de cor" como
+critério) moveu a taxa de clique-sobre-canvas, que fechou a sessão em 0/41.
+Ver docstring de `experiments.live.hcaptcha_llm_vision_attempt` para a
+análise completa.
 """
 
 from __future__ import annotations
@@ -235,15 +246,25 @@ def solve_puzzle_piece(
 
 _CANVAS_CRITERION_PROMPTS = {
     "icon_outlier": (
-        "Esta imagem mostra um pequeno conjunto de ícones/formas sobre um "
-        'fundo decorativo. Instrução original: "{criterion}". Siga este '
-        "raciocínio antes de responder: (1) enumere cada ícone/forma "
-        "distinto que você vê, com uma descrição breve de cor e formato de "
-        "cada um; (2) compare os ícones enumerados entre si; (3) identifique "
-        "qual deles é visualmente diferente dos demais (cor, formato ou "
-        "padrão diferente — não é sobre a posição, é sobre a aparência). "
-        "Retorne as coordenadas de pixel (x, y), relativas ao canto superior "
-        "esquerdo da imagem, do centro do ícone diferente."
+        "Esta imagem mostra tipicamente APENAS 2 ícones/formas sobre um "
+        'fundo decorativo colorido. Instrução original: "{criterion}". '
+        "Achado importante sobre este tipo específico de desafio: com só 2 "
+        "ícones não há uma 'maioria' pra comparar — o critério real costuma "
+        "ser qual dos dois ícones tem uma cor camuflada (parecida com as "
+        "cores do fundo ao redor dele, baixo contraste, 'some' visualmente) "
+        "versus qual tem uma cor que destoa claramente do fundo (alto "
+        "contraste, 'salta aos olhos'), mesmo que os dois ícones tenham o "
+        "mesmo formato. Siga este raciocínio antes de responder: (1) "
+        "enumere cada ícone, com a cor dele e a cor do fundo imediatamente "
+        "ao redor dele; (2) para cada ícone, avalie o contraste entre a cor "
+        "do ícone e a cor do fundo ao redor (camuflado = parecida; "
+        "destoante = bem diferente); (3) escolha como resposta o ícone cuja "
+        "cor mais destoa/contrasta com o fundo ao redor dele — esse é o "
+        "'diferente'. Se os formatos também forem visivelmente diferentes "
+        "entre si (não só a cor), priorize essa diferença de formato em vez "
+        "do contraste de cor. Retorne as coordenadas de pixel (x, y), "
+        "relativas ao canto superior esquerdo da imagem, do centro do ícone "
+        "escolhido."
     ),
     "closed_loop": (
         "Esta imagem mostra um conjunto de curvas/traçados desenhados sobre "
