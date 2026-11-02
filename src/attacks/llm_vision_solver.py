@@ -119,6 +119,13 @@ class CanvasPointsAnswer(BaseModel):
     fechados") com o mesmo schema — a diferença é só o tamanho de `points`.
     """
 
+    elements_considered: int = Field(
+        description=(
+            "Quantidade de elementos distintos (ícones/formas/curvas) que "
+            "você enumerou na imagem antes de decidir a resposta — serve só "
+            "para auditoria, não precisa bater com `points`."
+        )
+    )
     points: list[CanvasPoint] = Field(
         description=(
             "Lista de pontos a clicar, relativos ao canto superior esquerdo da "
@@ -226,9 +233,37 @@ def solve_puzzle_piece(
     return response.output_parsed
 
 
+_CANVAS_CRITERION_PROMPTS = {
+    "icon_outlier": (
+        "Esta imagem mostra um pequeno conjunto de ícones/formas sobre um "
+        'fundo decorativo. Instrução original: "{criterion}". Siga este '
+        "raciocínio antes de responder: (1) enumere cada ícone/forma "
+        "distinto que você vê, com uma descrição breve de cor e formato de "
+        "cada um; (2) compare os ícones enumerados entre si; (3) identifique "
+        "qual deles é visualmente diferente dos demais (cor, formato ou "
+        "padrão diferente — não é sobre a posição, é sobre a aparência). "
+        "Retorne as coordenadas de pixel (x, y), relativas ao canto superior "
+        "esquerdo da imagem, do centro do ícone diferente."
+    ),
+    "closed_loop": (
+        "Esta imagem mostra um conjunto de curvas/traçados desenhados sobre "
+        'um fundo decorativo. Instrução original: "{criterion}". Siga este '
+        "raciocínio antes de responder: (1) enumere cada curva/traçado "
+        "distinto que você vê; (2) para cada um, decida se ele é um laço "
+        "FECHADO (a linha forma uma forma fechada, sem pontas soltas — "
+        "começa e termina no mesmo lugar, delimitando uma área) ou um laço "
+        "ABERTO (tem pelo menos uma ponta solta/lacuna visível, não delimita "
+        "uma área fechada). Retorne as coordenadas de pixel (x, y), "
+        "relativas ao canto superior esquerdo da imagem, do centro de cada "
+        "curva classificada como FECHADA. Lista vazia se nenhuma for fechada."
+    ),
+}
+
+
 def solve_canvas_points(
     screenshot_png: bytes,
     instruction: str,
+    criterion_type: str | None = None,
     client: OpenAI | None = None,
 ) -> CanvasPointsAnswer:
     """Pede ao modelo em quais pontos clicar num desafio renderizado em `<canvas>`.
@@ -236,16 +271,32 @@ def solve_canvas_points(
     Cobre desafios de clique único (ex. "ícone diferente") e de seleção
     múltipla (ex. "laços fechados") — não há grade de células aqui, a
     resposta é em coordenadas de pixel livres, não índices de tile.
+
+    `criterion_type` seleciona um prompt especializado por natureza da
+    tarefa (`"icon_outlier"` — comparação visual pareada; `"closed_loop"` —
+    classificação de topologia de curva) em vez do prompt genérico anterior.
+    **Achado em 2026-11-01**: tratar os dois tipos com o mesmo prompt
+    genérico coincidiu com 0/23 sucessos reais mesmo com self-consistency —
+    o raciocínio estruturado por tipo (enumerar -> comparar/classificar ->
+    responder) é uma tentativa de correção, ainda não validada ao vivo.
+    `criterion_type=None` (ou um valor não reconhecido) cai no prompt
+    genérico original, mantendo compatibilidade com tipos de desafio ainda
+    não catalogados.
     """
     client = client or _client()
     criterion = _strip_ui_instructions(instruction)
-    prompt = (
-        "Esta imagem mostra um desafio CAPTCHA desenhado livremente (não é "
-        f'uma grade de células). Instrução original: "{criterion}". '
-        "Identifique as coordenadas de pixel (x, y), relativas ao canto "
-        "superior esquerdo da imagem, de cada ponto que deve ser clicado "
-        "para satisfazer a instrução. Pode ser um único ponto ou vários."
-    )
+    template = _CANVAS_CRITERION_PROMPTS.get(criterion_type) if criterion_type else None
+    if template:
+        prompt = template.format(criterion=criterion)
+    else:
+        prompt = (
+            "Esta imagem mostra um desafio CAPTCHA desenhado livremente (não é "
+            f'uma grade de células). Instrução original: "{criterion}". '
+            "Enumere os elementos distintos que você vê antes de responder. "
+            "Identifique as coordenadas de pixel (x, y), relativas ao canto "
+            "superior esquerdo da imagem, de cada ponto que deve ser clicado "
+            "para satisfazer a instrução. Pode ser um único ponto ou vários."
+        )
     response = client.responses.parse(
         model=MODEL_ID,
         max_output_tokens=1024,
@@ -266,6 +317,7 @@ def solve_canvas_points(
 def solve_canvas_points_by_consensus(
     screenshot_png: bytes,
     instruction: str,
+    criterion_type: str | None = None,
     n_votes: int = 3,
     cluster_radius: float = 40.0,
     client: OpenAI | None = None,
@@ -293,6 +345,11 @@ def solve_canvas_points_by_consensus(
     votação segue com as demais; só propaga o erro se todas falharem.
     `n_votes=1` desliga o consenso (chamada única, sem custo extra).
 
+    `criterion_type` é repassado direto a cada chamada de
+    `solve_canvas_points` (ver lá o prompt especializado por tipo). O
+    `elements_considered` da resposta final é a média arredondada entre as
+    rodadas válidas — só diagnóstico, não participa da lógica de consenso.
+
     **Achado ao vivo em 2026-11-01**: ao contrário da recusa de segurança
     observada em `solve_recaptcha_grid` (que preenche o schema com
     `tile_indices=[]` em vez de quebrar), uma recusa em `solve_canvas_points`
@@ -310,7 +367,10 @@ def solve_canvas_points_by_consensus(
     for _ in range(n_votes):
         try:
             answer = solve_canvas_points(
-                screenshot_png=screenshot_png, instruction=instruction, client=client
+                screenshot_png=screenshot_png,
+                instruction=instruction,
+                criterion_type=criterion_type,
+                client=client,
             )
             if answer is None:
                 raise ValueError(
@@ -352,7 +412,14 @@ def solve_canvas_points_by_consensus(
         if len(cluster) > majority_threshold
     ]
     combined_reasoning = " | ".join(answer.reasoning for answer in answers)
-    return CanvasPointsAnswer(points=winning_points, reasoning=combined_reasoning)
+    avg_elements_considered = round(
+        sum(answer.elements_considered for answer in answers) / len(answers)
+    )
+    return CanvasPointsAnswer(
+        points=winning_points,
+        reasoning=combined_reasoning,
+        elements_considered=avg_elements_considered,
+    )
 
 
 def solve_recaptcha_grid_by_majority_vote(

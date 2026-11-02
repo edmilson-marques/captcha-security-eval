@@ -28,6 +28,7 @@ canvas usam clique/arrasto humanizado via `harness/humanized_actions.py`).
 
 from __future__ import annotations
 
+import base64
 import time
 
 from selenium.common.exceptions import TimeoutException
@@ -57,6 +58,58 @@ from harness.humanized_actions import click_canvas_point, drag_canvas_point
 
 RECAPTCHA_DEMO_URL = "https://www.google.com/recaptcha/api2/demo"
 HCAPTCHA_DEMO_URL = "https://accounts.hcaptcha.com/demo"
+
+
+def _canvas_native_screenshot(driver, canvas) -> tuple[bytes, float]:
+    """Captura o bitmap NATIVO do `<canvas>` (`toDataURL`), não o render CSS downscaled.
+
+    `canvas.screenshot_as_png` (usado pelo fluxo de arrastar-e-encaixar, que
+    já funciona bem e não foi mexido) captura o canvas no tamanho CSS exibido
+    (ex. 500x470) — mas o canvas pode ter uma resolução interna maior (ex.
+    1000x940, um fator de 2x), e a diferença de nitidez é visível. Validado
+    ao vivo em 2026-11-01 (sem `SecurityError` — o canvas não é "tainted" por
+    conteúdo cross-origin): a versão nativa deixa bordas de ícones/curvas bem
+    mais definidas, mais fácil de distinguir diferença sutil ou se um traço
+    fecha ou não.
+
+    Retorna `(bytes_png, escala)`, onde `escala = largura_nativa / largura_css`
+    — **as coordenadas que o modelo devolve vêm no espaço nativo**; é preciso
+    dividir por `escala` antes de usar com `harness.humanized_actions`
+    (que trabalha em coordenada CSS, a mesma de `canvas.size`). Gotcha
+    descoberto na validação: esquecer essa conversão faz todo clique sair
+    fora do alvo.
+
+    Limitação conhecida, aceita por ora (evitar overengineering): a barra de
+    cabeçalho do desafio não é desenhada no canvas (é DOM separado), então a
+    região correspondente vem preta no bitmap nativo — não teve impacto
+    funcional na validação manual, já que o texto da instrução já é passado
+    separado ao modelo via `instruction`.
+    """
+    native_width = int(canvas.get_attribute("width"))
+    css_width = canvas.size["width"]
+    scale = native_width / css_width
+    data_url = driver.execute_script("return arguments[0].toDataURL('image/png');", canvas)
+    _, encoded = data_url.split(",", 1)
+    return base64.b64decode(encoded), scale
+
+
+def _infer_canvas_criterion_type(prompt: str) -> str | None:
+    """Mapeia o texto do prompt do hCaptcha para um `criterion_type` de solver.
+
+    Heurística simples por palavra-chave — cobre as variações de texto já
+    observadas ao vivo ("ícone que é diferente", "figura que quebra o
+    padrão") como `"icon_outlier"` (mesma natureza: achar o elemento que
+    destoa) e "laços fechados" como `"closed_loop"`. Retorna `None` pra
+    qualquer prompt não reconhecido, caindo no prompt genérico de
+    `solve_canvas_points` — não quebra pra tipos de desafio ainda não
+    catalogados.
+    """
+    lowered = prompt.lower()
+    if "laç" in lowered or "loop" in lowered:
+        return "closed_loop"
+    if "diferente" in lowered or "quebra" in lowered or "padrão" in lowered:
+        return "icon_outlier"
+    return None
 
 
 def recaptcha_baseline_attempt(demo_url: str = RECAPTCHA_DEMO_URL, headless: bool = True) -> dict:
@@ -544,6 +597,59 @@ def hcaptcha_llm_vision_attempt(
     (self-consistency). Não testei aqui se um modelo mais forte (`gpt-6-astra`)
     ou um pré-processamento de imagem diferente mudaria isso — ficaria para
     uma próxima rodada, se o usuário pedir.
+
+    **Ciclo de /loop de diagnóstico estruturado (2026-11-02), 3 correções
+    implementadas e testadas**: a pedido do usuário, apliquei um roteiro de
+    diagnóstico formal (≥3 hipóteses de causa raiz, ≥3 correções por
+    hipótese, escolha justificada evitando overengineering) ao problema do
+    clique-sobre-canvas. Causas-raiz consideradas: (RC1) limite de precisão
+    visual intrínseco do modelo; (RC2) resolução/qualidade da imagem enviada
+    insuficiente; (RC3) prompt genérico, pouco estruturado, pra uma tarefa
+    de discriminação visual sutil; (RC4) tratar "ícone diferente" e "laços
+    fechados" com o mesmo prompt/schema genérico apesar de serem problemas
+    de natureza diferente. Descartei explicitamente trocar para um modelo
+    mais caro (`gpt-6-astra`) sem pedir antes (acordado com o usuário) e
+    qualquer correção que reabrisse a questão de recusa de segurança.
+
+    Implementadas (ver `_canvas_native_screenshot`/`_infer_canvas_criterion_type`
+    aqui, e `attacks.llm_vision_solver.solve_canvas_points`/`CanvasPointsAnswer`):
+    (1) captura do bitmap NATIVO do canvas via `toDataURL` em vez do
+    screenshot CSS downscaled (RC2) — validado ao vivo sem `SecurityError`,
+    ganho real de resolução (2x no caso observado); (2) prompt especializado
+    por `criterion_type` (`icon_outlier`/`closed_loop`) com raciocínio
+    estruturado (enumerar -> comparar/classificar -> responder) em vez do
+    prompt genérico (RC3 + RC4); (3) campo `elements_considered` na resposta,
+    só para auditoria/diagnóstico. **Gotcha crítico documentado**: a captura
+    nativa muda o espaço de coordenada (pode não ser 1:1 com o CSS/`canvas.size`
+    usado por `harness.humanized_actions`) — é preciso escalar antes de
+    clicar, ou todo clique sai fora do alvo; feito via `native_scale` em
+    `_canvas_native_screenshot`.
+
+    **Achado novo durante a validação (smoke test, 5 tentativas + inspeção
+    visual direta de 3 amostras nativas)**: em "ícone diferente", a demo
+    oficial do hCaptcha mostra consistentemente só **2 ícones** por desafio
+    (não um grupo com uma maioria clara e 1 intruso, como o nome do desafio
+    sugere) — confirmado tanto pelo raciocínio do próprio modelo
+    ("não há uma maioria de referência") quanto por inspeção visual minha
+    direta das imagens em alta resolução. Com só 2 candidatos, "o diferente"
+    não é uma comparação com maioria — parece ser um teste de **quebra de
+    camuflagem**: qual dos dois ícones tem uma cor que destoa da paleta do
+    fundo decorativo (o alvo) vs. qual foi deliberadamente colorido para se
+    camuflar na paleta do fundo — uma habilidade perceptual distinta de
+    classificação semântica (que o modelo já faz bem na grade do reCAPTCHA).
+    Isso refina a hipótese (a): não é "o modelo erra decisões semânticas
+    sutis", é "o modelo pode não estar calibrado pra detectar camuflagem de
+    cor relativa ao fundo" — um prompt que nomeie esse critério explicitamente
+    (em vez de "visualmente diferente", genérico) é uma correção ainda não
+    tentada. Fica em aberto pra próxima rodada, se o usuário confirmar.
+
+    Smoke test de 5 tentativas reais após essas 3 mudanças: 4 "ícone
+    diferente" (0/4, mesmo padrão de "só 2 ícones, sem maioria" no raciocínio
+    de 3 delas) + 1 "challenge_not_presented" — nenhum erro de execução
+    (schema, Selenium, escala de coordenada). Insuficiente pra medir taxa de
+    sucesso (N pequeno de propósito, por acordo prévio de não rodar lote
+    grande sem perguntar primeiro) — lote oficial de validação ainda não
+    rodado nesta rodada.
     """
     driver = build_driver(BrowserConfig(headless=headless))
     try:
@@ -638,16 +744,31 @@ def hcaptcha_llm_vision_attempt(
                     }
                 )
             else:
+                native_screenshot, native_scale = _canvas_native_screenshot(driver, canvas)
+                criterion_type = _infer_canvas_criterion_type(prompt)
                 click_answer = solve_canvas_points_by_consensus(
-                    screenshot_png=screenshot, instruction=prompt, n_votes=n_votes
+                    screenshot_png=native_screenshot,
+                    instruction=prompt,
+                    criterion_type=criterion_type,
+                    n_votes=n_votes,
                 )
-                for point in click_answer.points:
-                    click_canvas_point(driver, canvas, (point.x, point.y), canvas_wh)
+                # `click_answer` vem em coordenada do bitmap NATIVO do canvas
+                # (resolução interna, ex. 2x a CSS); harness.humanized_actions
+                # trabalha em coordenada CSS (a mesma de canvas_wh/canvas.size)
+                # — converter antes de clicar, senão o clique sai fora do alvo.
+                css_points = [
+                    (point.x / native_scale, point.y / native_scale)
+                    for point in click_answer.points
+                ]
+                for css_point in css_points:
+                    click_canvas_point(driver, canvas, css_point, canvas_wh)
                     time.sleep(0.3)
                 extra.update(
                     {
                         "challenge_type": "canvas_points",
-                        "points": [(point.x, point.y) for point in click_answer.points],
+                        "criterion_type": criterion_type,
+                        "points": css_points,
+                        "elements_considered": click_answer.elements_considered,
                         "reasoning": click_answer.reasoning,
                     }
                 )
