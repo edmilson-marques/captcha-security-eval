@@ -4,6 +4,7 @@ Exemplo:
     python -m experiments.run_live_cli --target recaptcha --technique baseline_no_select --n 3
     python -m experiments.run_live_cli --target recaptcha --technique llm_vision --n 1
     python -m experiments.run_live_cli --target hcaptcha --n 3 --headed
+    python -m experiments.run_live_cli --target hcaptcha --technique classical_cv --n 5
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from functools import partial
 from attacks.llm_vision_solver import MODEL_ID
 from experiments.live import (
     hcaptcha_baseline_attempt,
+    hcaptcha_classical_cv_attempt,
     hcaptcha_llm_vision_attempt,
     recaptcha_baseline_attempt,
     recaptcha_llm_vision_attempt,
@@ -29,6 +31,7 @@ ATTEMPT_FNS = {
     "hcaptcha": {
         "baseline_no_select": hcaptcha_baseline_attempt,
         "llm_vision": hcaptcha_llm_vision_attempt,
+        "classical_cv": hcaptcha_classical_cv_attempt,
     },
 }
 
