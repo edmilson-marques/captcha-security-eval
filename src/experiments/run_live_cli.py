@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from functools import partial
 
+from attacks.llm_vision_solver import MODEL_ID
 from experiments.live import (
     hcaptcha_baseline_attempt,
     hcaptcha_llm_vision_attempt,
@@ -40,6 +41,15 @@ def main() -> None:
     )
     parser.add_argument("--n", type=int, default=3, help="Número de tentativas")
     parser.add_argument("--headed", action="store_true", help="Roda com navegador visível (debug)")
+    parser.add_argument(
+        "--canvas-model",
+        default=MODEL_ID,
+        help=(
+            "Modelo da OpenAI a usar só para o solver de clique-sobre-canvas do "
+            f"hCaptcha (ícone diferente/laços fechados). Padrão: {MODEL_ID}. "
+            "Ignorado para outras técnicas/alvos."
+        ),
+    )
     args = parser.parse_args()
 
     techniques = ATTEMPT_FNS[args.target]
@@ -49,7 +59,11 @@ def main() -> None:
             f"Opções: {sorted(techniques)}"
         )
 
-    attempt_fn = partial(techniques[args.technique], headless=not args.headed)
+    extra_kwargs = {}
+    if techniques[args.technique] is hcaptcha_llm_vision_attempt:
+        extra_kwargs["canvas_model"] = args.canvas_model
+
+    attempt_fn = partial(techniques[args.technique], headless=not args.headed, **extra_kwargs)
     results = run_experiment(
         target=args.target,
         technique=args.technique,

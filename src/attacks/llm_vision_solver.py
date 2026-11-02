@@ -278,6 +278,18 @@ _CANVAS_CRITERION_PROMPTS = {
         "relativas ao canto superior esquerdo da imagem, do centro de cada "
         "curva classificada como FECHADA. Lista vazia se nenhuma for fechada."
     ),
+    "digit_membership": (
+        "Esta imagem mostra um ou mais números/dígitos desenhados sobre um "
+        'fundo decorativo. Instrução original: "{criterion}" — ela '
+        'especifica um grupo de dígitos-alvo (ex. "789" significa que o '
+        "grupo é {{7, 8, 9}}). Siga este raciocínio antes de responder: (1) "
+        "releia a instrução e identifique os dígitos exatos do grupo-alvo; "
+        "(2) enumere cada número visível na imagem, lendo o dígito de cada "
+        "um; (3) identifique qual número visível É IGUAL a um dos dígitos "
+        "do grupo-alvo (correspondência exata de caractere, não aparência "
+        "visual). Retorne as coordenadas de pixel (x, y), relativas ao "
+        "canto superior esquerdo da imagem, do centro desse número."
+    ),
 }
 
 
@@ -285,6 +297,7 @@ def solve_canvas_points(
     screenshot_png: bytes,
     instruction: str,
     criterion_type: str | None = None,
+    model: str = MODEL_ID,
     client: OpenAI | None = None,
 ) -> CanvasPointsAnswer:
     """Pede ao modelo em quais pontos clicar num desafio renderizado em `<canvas>`.
@@ -296,13 +309,18 @@ def solve_canvas_points(
     `criterion_type` seleciona um prompt especializado por natureza da
     tarefa (`"icon_outlier"` — comparação visual pareada; `"closed_loop"` —
     classificação de topologia de curva) em vez do prompt genérico anterior.
-    **Achado em 2026-11-01**: tratar os dois tipos com o mesmo prompt
-    genérico coincidiu com 0/23 sucessos reais mesmo com self-consistency —
-    o raciocínio estruturado por tipo (enumerar -> comparar/classificar ->
-    responder) é uma tentativa de correção, ainda não validada ao vivo.
     `criterion_type=None` (ou um valor não reconhecido) cai no prompt
     genérico original, mantendo compatibilidade com tipos de desafio ainda
     não catalogados.
+
+    **Achados em 2026-11-01/02**: nem o prompt genérico, nem o
+    `criterion_type` estruturado, nem um prompt nomeando explicitamente
+    "quebra de camuflagem de cor" melhoraram a taxa real de sucesso (0/41 no
+    total) — ver `experiments.live.hcaptcha_llm_vision_attempt`. `model`
+    (default `MODEL_ID`, i.e. `gpt-6.1-terra`) permite testar um modelo mais
+    forte (ex. `gpt-6-astra`) **só para este solver**, sem mudar o padrão
+    usado pelos outros (que já funcionam bem — grade do reCAPTCHA e
+    arrastar-e-encaixar do hCaptcha) nem o custo deles.
     """
     client = client or _client()
     criterion = _strip_ui_instructions(instruction)
@@ -319,7 +337,7 @@ def solve_canvas_points(
             "para satisfazer a instrução. Pode ser um único ponto ou vários."
         )
     response = client.responses.parse(
-        model=MODEL_ID,
+        model=model,
         max_output_tokens=1024,
         input=[
             {
@@ -339,6 +357,7 @@ def solve_canvas_points_by_consensus(
     screenshot_png: bytes,
     instruction: str,
     criterion_type: str | None = None,
+    model: str = MODEL_ID,
     n_votes: int = 3,
     cluster_radius: float = 40.0,
     client: OpenAI | None = None,
@@ -366,8 +385,9 @@ def solve_canvas_points_by_consensus(
     votação segue com as demais; só propaga o erro se todas falharem.
     `n_votes=1` desliga o consenso (chamada única, sem custo extra).
 
-    `criterion_type` é repassado direto a cada chamada de
-    `solve_canvas_points` (ver lá o prompt especializado por tipo). O
+    `criterion_type` e `model` são repassados direto a cada chamada de
+    `solve_canvas_points` (ver lá o prompt especializado por tipo e a opção
+    de testar um modelo mais forte só para este solver). O
     `elements_considered` da resposta final é a média arredondada entre as
     rodadas válidas — só diagnóstico, não participa da lógica de consenso.
 
@@ -391,6 +411,7 @@ def solve_canvas_points_by_consensus(
                 screenshot_png=screenshot_png,
                 instruction=instruction,
                 criterion_type=criterion_type,
+                model=model,
                 client=client,
             )
             if answer is None:

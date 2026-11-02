@@ -37,6 +37,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 
 from attacks.llm_vision_solver import (
+    MODEL_ID,
     solve_canvas_points_by_consensus,
     solve_puzzle_piece,
     solve_recaptcha_grid_by_majority_vote,
@@ -97,16 +98,22 @@ def _infer_canvas_criterion_type(prompt: str) -> str | None:
     """Mapeia o texto do prompt do hCaptcha para um `criterion_type` de solver.
 
     Heurística simples por palavra-chave — cobre as variações de texto já
-    observadas ao vivo ("ícone que é diferente", "figura que quebra o
-    padrão") como `"icon_outlier"` (mesma natureza: achar o elemento que
-    destoa) e "laços fechados" como `"closed_loop"`. Retorna `None` pra
-    qualquer prompt não reconhecido, caindo no prompt genérico de
-    `solve_canvas_points` — não quebra pra tipos de desafio ainda não
-    catalogados.
+    observadas ao vivo: "ícone que é diferente"/"figura que quebra o padrão"
+    como `"icon_outlier"` (achar o elemento que destoa/camufla — ver achado
+    de 2026-11-02 em `hcaptcha_llm_vision_attempt`); "laços fechados" como
+    `"closed_loop"`; "número que pertence a este grupo: 789" como
+    `"digit_membership"` (achado de 2026-11-02: diferente dos outros dois,
+    tem resposta objetivamente verificável — o dígito exato pertence ou não
+    ao conjunto citado na instrução, não é um julgamento perceptual
+    subjetivo). Retorna `None` pra qualquer prompt não reconhecido, caindo
+    no prompt genérico de `solve_canvas_points` — não quebra pra tipos de
+    desafio ainda não catalogados.
     """
     lowered = prompt.lower()
     if "laç" in lowered or "loop" in lowered:
         return "closed_loop"
+    if "pertence" in lowered or "grupo" in lowered:
+        return "digit_membership"
     if "diferente" in lowered or "quebra" in lowered or "padrão" in lowered:
         return "icon_outlier"
     return None
@@ -470,6 +477,7 @@ def hcaptcha_llm_vision_attempt(
     headless: bool = True,
     max_rounds: int = 3,
     n_votes: int = 3,
+    canvas_model: str = MODEL_ID,
 ) -> dict:
     """Resolve o desafio hCaptcha de verdade — 4 tipos distintos observados ao vivo.
 
@@ -757,6 +765,17 @@ def hcaptcha_llm_vision_attempt(
 
             if "arrast" in prompt.lower():
                 drag_answer = solve_puzzle_piece(screenshot_png=screenshot, instruction=prompt)
+                if drag_answer is None:
+                    # Mesmo achado de solve_canvas_points (ver llm_vision_solver.py):
+                    # uma recusa pode fazer output_parsed vir None em vez de um
+                    # DragPuzzleAnswer preenchido. Erro claro em vez de
+                    # AttributeError opaco (capturado por experiments.runner de
+                    # qualquer forma, mas com uma mensagem útil no lugar de
+                    # "'NoneType' object has no attribute 'piece_x'").
+                    raise ValueError(
+                        "solve_puzzle_piece retornou None (provável recusa do "
+                        "modelo sem preencher o schema)"
+                    )
                 drag_canvas_point(
                     driver,
                     canvas,
@@ -779,6 +798,7 @@ def hcaptcha_llm_vision_attempt(
                     screenshot_png=native_screenshot,
                     instruction=prompt,
                     criterion_type=criterion_type,
+                    model=canvas_model,
                     n_votes=n_votes,
                 )
                 # `click_answer` vem em coordenada do bitmap NATIVO do canvas

@@ -132,6 +132,55 @@ def test_solve_canvas_points_returns_parsed_answer_and_builds_correct_request():
     assert content[1]["type"] == "input_image"
 
 
+def test_solve_canvas_points_defaults_to_module_model_id():
+    expected = CanvasPointsAnswer(
+        elements_considered=1, points=[CanvasPoint(x=0, y=0)], reasoning="x"
+    )
+    client = _fake_client(expected)
+
+    solve_canvas_points(
+        screenshot_png=b"fake-png-bytes",
+        instruction="Clique no ícone que é diferente",
+        client=client,
+    )
+
+    assert client.responses.parse.call_args.kwargs["model"] == "gpt-6.1-terra"
+
+
+def test_solve_canvas_points_accepts_model_override():
+    expected = CanvasPointsAnswer(
+        elements_considered=1, points=[CanvasPoint(x=0, y=0)], reasoning="x"
+    )
+    client = _fake_client(expected)
+
+    solve_canvas_points(
+        screenshot_png=b"fake-png-bytes",
+        instruction="Clique no ícone que é diferente",
+        model="gpt-6-astra",
+        client=client,
+    )
+
+    assert client.responses.parse.call_args.kwargs["model"] == "gpt-6-astra"
+
+
+def test_solve_canvas_points_by_consensus_passes_model_override_through():
+    expected = CanvasPointsAnswer(
+        elements_considered=1, points=[CanvasPoint(x=0, y=0)], reasoning="x"
+    )
+    client = _fake_client(expected)
+
+    solve_canvas_points_by_consensus(
+        screenshot_png=b"fake-png-bytes",
+        instruction="Clique no ícone que é diferente",
+        model="gpt-6-astra",
+        n_votes=2,
+        client=client,
+    )
+
+    for call in client.responses.parse.call_args_list:
+        assert call.kwargs["model"] == "gpt-6-astra"
+
+
 def test_solve_canvas_points_uses_icon_outlier_prompt_when_criterion_type_set():
     expected = CanvasPointsAnswer(
         elements_considered=2, points=[CanvasPoint(x=1, y=1)], reasoning="x"
@@ -166,6 +215,24 @@ def test_solve_canvas_points_uses_closed_loop_prompt_when_criterion_type_set():
     prompt_text = client.responses.parse.call_args.kwargs["input"][0]["content"][0]["text"]
     assert "FECHADO" in prompt_text
     assert "ABERTO" in prompt_text
+
+
+def test_solve_canvas_points_uses_digit_membership_prompt_when_criterion_type_set():
+    expected = CanvasPointsAnswer(
+        elements_considered=2, points=[CanvasPoint(x=1, y=1)], reasoning="x"
+    )
+    client = _fake_client(expected)
+
+    solve_canvas_points(
+        screenshot_png=b"fake-png-bytes",
+        instruction="Clique no número que pertence a este grupo: 789",
+        criterion_type="digit_membership",
+        client=client,
+    )
+
+    prompt_text = client.responses.parse.call_args.kwargs["input"][0]["content"][0]["text"]
+    assert "{7, 8, 9}" in prompt_text
+    assert "correspondência exata de caractere" in prompt_text
 
 
 def test_solve_canvas_points_falls_back_to_generic_prompt_for_unknown_criterion_type():
