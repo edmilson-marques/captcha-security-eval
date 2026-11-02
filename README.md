@@ -253,6 +253,24 @@ contraste de cor (ex. Delta-E) entre o ícone e o fundo ao redor numericamente
 em vez de pedir ao modelo um julgamento qualitativo, usando/estendendo
 `src/attacks/classical_cv.py` (Atividade 2).
 
+**Ciclo 3: `gpt-6-astra` (10x mais caro) — também não melhorou.** Com
+autorização explícita do usuário, testei o modelo mais forte só no solver de
+clique-sobre-canvas (`--canvas-model`, sem mexer no padrão usado pelos
+solvers que já funcionam). No caminho, descobri um **6º tipo de desafio**
+("Clique no número que pertence a este grupo: 789") com resposta
+objetivamente verificável — diferente dos outros dois, não é julgamento
+perceptual subjetivo — e adicionei um `criterion_type="digit_membership"`
+dedicado antes de medir. **Resultado: 0/10** (0/6 ícone diferente, 0/4 número
+do grupo — este último notável, já que leitura de dígito costuma ser ponto
+forte de modelo de visão). Somando com o histórico, clique-sobre-canvas
+fecha a sessão em **0/51**. Um modelo substancialmente mais forte não
+acertar nem a tarefa mais objetiva (ler um dígito) enfraquece a hipótese de
+"modelo insuficiente" — o padrão agora sugere algo na execução/verificação
+do próprio desafio ainda não identificado, não necessariamente um teto de
+capacidade do modelo. Bug real corrigido no caminho: `solve_puzzle_piece`
+também podia retornar `None` numa recusa sem tratamento (mesmo padrão já
+visto em `solve_canvas_points`).
+
 ## Rodando o OCR (opcional)
 
 `src/attacks/ocr.py` depende do binário de sistema `tesseract-ocr`. Se não estiver
@@ -279,18 +297,20 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       acima). hCaptcha: 4 tipos de desafio distintos observados ao vivo (grade, ícone
       diferente, arrastar-e-encaixar, laços fechados — nenhum grade de tiles exceto o
       primeiro, `image_grid_cnn/` não se aplica aos outros 3), cada um com solver
-      próprio — puxado quase todo pelo arrastar-e-encaixar (10/17 nas três rodadas, ~59%);
-      clique em ponto sobre canvas (ícone diferente + laços fechados) ficou em **0/41**
-      mesmo depois de: self-consistency por consenso espacial, instrumentação de evento JS
-      (descartou bug de execução — 100% `isTrusted=true`, coordenada exata), captura
-      nativa do canvas (2x resolução), prompt estruturado por tipo de critério, e prompt
-      nomeando explicitamente "quebra de camuflagem de cor". Três correções de prompt/
-      imagem independentes sem nenhum efeito é evidência forte de limitação de capacidade
-      perceptual do modelo para esses dois tipos específicos, não um problema de
-      engenharia de prompt. **Falta**: ligar o Turnstile (precisa de página própria) e, se
-      o usuário autorizar, testar um modelo mais forte (`gpt-6-astra`) ou uma abordagem de
-      visão computacional clássica (contraste de cor numérico via `classical_cv.py`) para
-      o clique-sobre-canvas. Rodar lotes maiores de coleta deve ter ritmo/volume combinado
+      próprio — puxado quase todo pelo arrastar-e-encaixar (16/24 nas quatro rodadas, ~67%);
+      clique em ponto sobre canvas (ícone diferente, laços fechados, e um 6º tipo
+      descoberto, "número que pertence a um grupo") ficou em **0/51** mesmo depois de:
+      self-consistency por consenso espacial, instrumentação de evento JS (descartou bug
+      de execução — 100% `isTrusted=true`, coordenada exata), captura nativa do canvas (2x
+      resolução), prompt estruturado por tipo de critério, prompt nomeando explicitamente
+      "quebra de camuflagem de cor", e um modelo substancialmente mais forte
+      (`gpt-6-astra`, 10x mais caro). O modelo mais forte não acertar nem a tarefa mais
+      objetiva (ler um dígito) enfraquece a hipótese de "modelo insuficiente" — o padrão
+      sugere algo na execução/verificação do próprio desafio ainda não identificado.
+      **Falta**: ligar o Turnstile (precisa de página própria) e, se o usuário autorizar,
+      uma abordagem de visão computacional clássica (contraste de cor numérico via
+      `classical_cv.py`) ou investigação adicional de timing/staleness do canvas para o
+      clique-sobre-canvas. Rodar lotes maiores de coleta deve ter ritmo/volume combinado
       com o orientador (ver "Escopo ético" acima).
 - [x] Atividade 7 — testes unitários (89 passed/3 skipped) + comparação das
       técnicas (`analysis/compare.py`) (Out-Nov/2026)
