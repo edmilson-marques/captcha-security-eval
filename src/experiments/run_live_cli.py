@@ -7,6 +7,9 @@ Exemplo:
     python -m experiments.run_live_cli --target hcaptcha --technique classical_cv --n 5
     python -m experiments.run_live_cli --target hcaptcha --technique classical_cv --n 500 \
         --pause-every 10 --pause-seconds 30
+    python -m experiments.run_live_cli --target turnstile --technique behavioral_probe --n 5
+    python -m experiments.run_live_cli --target turnstile --technique behavioral_probe --n 1 \
+        --sitekey 3x00000000000000000000FF
 """
 
 from __future__ import annotations
@@ -17,11 +20,13 @@ from functools import partial
 
 from attacks.llm_vision_solver import MODEL_ID
 from experiments.live import (
+    TURNSTILE_SITEKEY_ALWAYS_PASS,
     hcaptcha_baseline_attempt,
     hcaptcha_classical_cv_attempt,
     hcaptcha_llm_vision_attempt,
     recaptcha_baseline_attempt,
     recaptcha_llm_vision_attempt,
+    turnstile_behavioral_attempt,
 )
 from experiments.metrics import accuracy, outcome_breakdown
 from experiments.runner import run_experiment
@@ -35,6 +40,9 @@ ATTEMPT_FNS = {
         "baseline_no_select": hcaptcha_baseline_attempt,
         "llm_vision": hcaptcha_llm_vision_attempt,
         "classical_cv": hcaptcha_classical_cv_attempt,
+    },
+    "turnstile": {
+        "behavioral_probe": turnstile_behavioral_attempt,
     },
 }
 
@@ -72,6 +80,17 @@ def main() -> None:
         default=30.0,
         help="Duração da pausa (segundos) a cada --pause-every tentativas. Padrão: 30.",
     )
+    parser.add_argument(
+        "--sitekey",
+        default=TURNSTILE_SITEKEY_ALWAYS_PASS,
+        help=(
+            "Sitekey do Cloudflare Turnstile a usar (padrão: sitekey de teste "
+            "'sempre passa'). Ignorado para outros alvos/técnicas. Troque pela "
+            "sitekey própria do aluno (modo Managed) pra medir robustez real "
+            "em vez do comportamento fixo das sitekeys de teste — ver "
+            "'Escopo ético' no README."
+        ),
+    )
     args = parser.parse_args()
 
     techniques = ATTEMPT_FNS[args.target]
@@ -84,6 +103,8 @@ def main() -> None:
     extra_kwargs = {}
     if techniques[args.technique] is hcaptcha_llm_vision_attempt:
         extra_kwargs["canvas_model"] = args.canvas_model
+    if techniques[args.technique] is turnstile_behavioral_attempt:
+        extra_kwargs["sitekey"] = args.sitekey
 
     def _print_pause_progress(done: int, total: int) -> None:
         # `flush=True`: achado ao vivo em 2026-11-02 — sem isso, o progresso

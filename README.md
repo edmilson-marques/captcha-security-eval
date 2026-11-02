@@ -322,6 +322,58 @@ técnicas tentadas (LLM de visão, incluindo modelo mais forte; CV
 clássica/OCR) — um resultado legítimo e documentável para a comparação,
 não um problema em aberto a continuar perseguindo sem uma direção nova.
 
+### Cloudflare Turnstile (`turnstile_behavioral_attempt`) — ligado
+
+A Cloudflare não mantém uma página de demo oficial full-page (diferente do
+Google/hCaptcha) — nota já registrada em `config/targets.yaml`. A
+alternativa documentada pela própria Cloudflare pra testar uma integração
+sem precisar de conta/domínio próprio são as *sitekeys de teste* publicadas
+em developers.cloudflare.com/turnstile/troubleshooting/testing/, que
+funcionam em qualquer origem: `1x00000000000000000000AA` (sempre passa),
+`2x00000000000000000000AB` (sempre bloqueia), `3x00000000000000000000FF`
+(sempre força desafio interativo).
+
+```bash
+python -m experiments.run_live_cli --target turnstile --technique behavioral_probe --n 5
+python -m experiments.run_live_cli --target turnstile --technique behavioral_probe --n 1 \
+    --sitekey 3x00000000000000000000FF
+```
+
+**Investigação ao vivo do DOM** (`harness/turnstile_test_server.py`,
+docstring completa): o widget renderiza a UI visível (checkbox, texto,
+logo) sem nenhum `<iframe>` e sem nenhum elemento acessível via
+`querySelectorAll`/`innerHTML` no DOM principal — confirmado inspecionando
+`document.documentElement.outerHTML` e testando `element.shadowRoot` em
+todos os elementos da página (sempre `null`). Consistente com **Shadow DOM
+fechado** (técnica legítima anti-adulteração do próprio navegador, não uma
+limitação da ferramenta). Por isso a detecção de resultado não tenta
+inspecionar DOM: usa os *callbacks* JS oficiais do Turnstile
+(`data-callback`/`data-error-callback`/`data-expired-callback`),
+verificados ao vivo contra as 3 sitekeys antes de escrever a técnica.
+
+`harness/turnstile_test_server.py` serve localmente (via
+`http.server.ThreadingHTTPServer` numa thread daemon) uma página mínima
+embutindo o script oficial do widget com a sitekey escolhida, pra que o
+Selenium navegue até ela como faria com qualquer alvo real.
+`turnstile_behavioral_attempt` navega até essa página, aguarda o widget
+resolver, e lê `window.__turnstileResult` (preenchido pelos callbacks)
+pra mapear o resultado: token presente → `success`; código de erro
+presente → `blocked`; nenhum dos dois (desafio interativo pendente sem
+resposta) → `failure`.
+
+**Validado ao vivo contra as 3 sitekeys de teste** — mapeamento correto em
+todos os casos: sempre-passa → `success` (token `XXXX.DUMMY.TOKEN.XXXX`),
+sempre-bloqueia → `blocked` (código de erro `600010`), sempre-força-desafio
+→ `failure` (`widget_state: interactive_challenge_pending`).
+
+**Limitação importante, documentada desde o início**: sitekeys de teste têm
+comportamento FIXO — servem pra validar que o pipeline de coleta/medição
+funciona de verdade, não pra medir a robustez real do Turnstile (que reage
+a sinais comportamentais genuínos do navegador, não a uma sitekey de
+teste). Medir robustez real exigiria uma sitekey Cloudflare própria do
+aluno em modo Managed — passo que só o aluno pode fazer (precisa de
+conta/domínio Cloudflare próprios), já apontado em `config/targets.yaml`.
+
 ## Rodando o OCR (opcional)
 
 `src/attacks/ocr.py` depende do binário de sistema `tesseract-ocr`. Se não estiver
@@ -358,10 +410,17 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       do desafio mascarando os ícones). **Conclusão**: os três tipos canvas permanecem sem
       solução nas duas técnicas tentadas — resultado legítimo e documentável pro estudo
       comparativo. Arrastar-e-encaixar e grade continuam resolvidos pelo solver via LLM.
-      **Falta**: ligar o Turnstile (precisa de página própria). Rodar lotes maiores de
-      coleta deve ter ritmo/volume combinado com o orientador (ver "Escopo ético" acima).
-- [x] Atividade 7 — testes unitários (89 passed/3 skipped) + comparação das
-      técnicas (`analysis/compare.py`) (Out-Nov/2026)
+      Turnstile: **ligado** via `turnstile_behavioral_attempt` (`experiments/live.py`) +
+      `harness/turnstile_test_server.py` — como a Cloudflare não tem demo full-page oficial,
+      serve localmente uma página com cada uma das 3 sitekeys de teste publicadas pela
+      própria Cloudflare (sempre-passa/sempre-bloqueia/sempre-força-desafio) e detecta o
+      resultado via os callbacks JS oficiais do widget (DOM é Shadow DOM fechado, sem
+      iframe nem elemento inspecionável — achado confirmado ao vivo), já que sitekeys de
+      teste têm comportamento fixo e só validam o pipeline, não a robustez real (que exigiria
+      sitekey própria do aluno em modo Managed). Rodar lotes maiores de coleta deve ter
+      ritmo/volume combinado com o orientador (ver "Escopo ético" acima).
+- [x] Atividade 7 — testes unitários (128 passed, 0 skipped com tesseract instalado) +
+      comparação das técnicas (`analysis/compare.py`) (Out-Nov/2026)
 - [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo
       mudanças de DOM/bloqueios durante a coleta real — Out-Nov/2026)
 - [x] Atividade 9 — relatório comparativo consolidado (`analysis/report.py`,
