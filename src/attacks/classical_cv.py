@@ -158,7 +158,10 @@ def _stroke_edge_mask(image: np.ndarray) -> np.ndarray:
 
 
 def detect_stroke_regions(
-    image: np.ndarray, min_area: int = 150, max_area_ratio: float = 0.3
+    image: np.ndarray,
+    min_area: int = 150,
+    max_area_ratio: float = 0.3,
+    max_bbox_span_ratio: float = 0.8,
 ) -> tuple[list[dict], np.ndarray]:
     """Detecta regiões de traço (ícones/curvas) via borda + fechamento morfológico.
 
@@ -166,19 +169,36 @@ def detect_stroke_regions(
     que `max_area_ratio` da imagem inteira (textura de fundo conectada em
     uma massa só, não um traço individual — ver achado no topo do módulo).
 
+    **Achado ao vivo em 2026-11-02**: o filtro de `max_area_ratio` (contagem
+    de pixel) sozinho não basta — a borda/moldura do próprio desafio (um
+    retângulo fino ao redor de toda a área de conteúdo) tem poucos pixels
+    (é só um contorno fino) mas um *bounding box* gigante, quase do tamanho
+    da imagem inteira. Isso fazia a borda passar pelo filtro de área e
+    "ganhar" como candidato de maior contraste em praticamente todo
+    desafio real, mascarando os ícones/traços de verdade — descoberto
+    porque 4 desafios reais e diferentes retornaram o mesmo ponto "detectado"
+    (artefato sistemático, não coincidência, mesmo padrão do achado sobre o
+    cabeçalho preto). Por isso também descarta qualquer componente cujo
+    *bounding box* (largura OU altura) ultrapasse `max_bbox_span_ratio` da
+    dimensão correspondente da imagem — um ícone/traço real não deveria
+    ocupar quase toda a largura ou altura do desafio.
+
     Retorna `(regions, mask)`: `regions` é uma lista de dicts
     `{"bbox": (x,y,w,h), "centroid": (cx,cy), "area": int}`, e `mask` é a
     máscara binária usada (precisa ser reaproveitada por
     `classify_loop_closure`, que opera sobre a mesma máscara).
     """
     mask = _stroke_edge_mask(image)
-    total_area = mask.shape[0] * mask.shape[1]
+    img_h, img_w = mask.shape
+    total_area = img_h * img_w
 
     num_labels, _labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
     regions = []
     for i in range(1, num_labels):
         x, y, w, h, area = stats[i]
         if area < min_area or area > total_area * max_area_ratio:
+            continue
+        if w > max_bbox_span_ratio * img_w or h > max_bbox_span_ratio * img_h:
             continue
         regions.append(
             {

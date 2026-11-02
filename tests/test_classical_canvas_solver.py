@@ -85,6 +85,24 @@ def test_solve_icon_outlier_classical_picks_the_more_contrasting_icon():
     assert abs(y - 220) < 40
 
 
+def test_solve_icon_outlier_classical_ignores_frame_border_artifact():
+    # Achado ao vivo (2026-11-02): sem o filtro de bbox em detect_stroke_regions,
+    # a borda/moldura do desafio (alto contraste, bbox gigante) "vencia" como
+    # resposta em praticamente todo desafio real, mascarando os ícones de
+    # verdade — reprodução mínima com uma borda branca sobre fundo escuro.
+    image = _flat_background(color=(30, 30, 30))
+    cv2.rectangle(image, (2, 2), (297, 297), color=(255, 255, 255), thickness=3)
+    cv2.circle(image, (150, 150), 20, color=(0, 0, 255), thickness=8)
+
+    result = solver.solve_icon_outlier_classical(image)
+
+    assert result is not None
+    x, y = result
+    # Deve escolher o ícone de verdade (centro da imagem), não um ponto na borda.
+    assert abs(x - 150) < 40
+    assert abs(y - 150) < 40
+
+
 def test_solve_icon_outlier_classical_returns_none_without_regions():
     image = _flat_background()
     assert solver.solve_icon_outlier_classical(image) is None
