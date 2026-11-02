@@ -143,6 +143,20 @@ def solve_digit_membership_classical(image: np.ndarray, instruction: str) -> tup
     números visíveis na imagem e retorna o centro do primeiro cujo caractere
     reconhecido esteja no grupo-alvo (maior confiança primeiro). `None` se
     nenhum dígito do grupo for encontrado.
+
+    **Achado ao vivo em 2026-11-02, corrige uma suposição anterior**: antes
+    deste achado, este desafio parecia "o mais fácil" dos três tipos canvas
+    (leitura de dígito costuma ser ponto forte tanto de OCR quanto de modelo
+    de visão). Inspecionando amostras reais capturadas direto do canvas
+    (sem custo de API), os dígitos aparecem **deliberadamente ocultos atrás
+    de um padrão denso de listras verticais** sobrepostas — a mesma técnica
+    clássica de ofuscação usada em CAPTCHAs de texto distorcido desde os
+    primeiros desenhos (von Ahn et al.), não um texto limpo e legível. Isso
+    explica por que tanto o solver via LLM quanto este OCR clássico tiveram
+    dificuldade aqui: não é um teto de capacidade de leitura de dígito em
+    geral, é um desafio especificamente projetado pra derrotar reconhecimento
+    de caractere. Tesseract chegou a reconhecer um dígito correto numa
+    amostra (confiança 28, baixa mas válida); na outra, não reconheceu nada.
     """
     target_digits = _parse_target_digits(instruction)
     if not target_digits:
