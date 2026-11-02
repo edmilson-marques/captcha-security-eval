@@ -915,11 +915,28 @@ def hcaptcha_classical_cv_attempt(
     Reaproveita a mesma captura em resolução nativa e o mesmo
     `_infer_canvas_criterion_type` já usados pelo solver via LLM (mesma
     conversão de coordenada nativa -> CSS antes de clicar, mesmo gotcha já
-    documentado lá). Ainda não validado ao vivo no momento em que este
-    docstring foi escrito — a prototipagem manual (ver `classical_cv.py`)
-    confirmou sinal razoável contra amostras reais salvas, mas o resultado
-    que importa é a taxa de sucesso medida ao vivo, não a prototipagem
-    offline (mesma prática já usada no resto do projeto).
+    documentado lá).
+
+    **Validado ao vivo em 2026-11-02, dois lotes reais**: (1) n=20 oficial,
+    0/20, que revelou e levou à correção de um bug real — uma borda/moldura
+    do próprio desafio mascarava os ícones de verdade em
+    `detect_stroke_regions` (ver `attacks/classical_cv.py`, achado
+    confirmado porque 4 desafios diferentes "detectavam" a mesma coordenada).
+    (2) Depois do fix, a pedido do usuário, um lote de **500 tentativas com
+    pausas de 30s a cada 10** (`run_live_cli.py --pause-every`/`--pause-seconds`,
+    ver `experiments.runner.run_experiment`) — **interrompido pelo usuário em
+    271/500 ao ver que não estava funcionando, com 0 sucessos**: 0/113 "ícone
+    diferente", 0/61 "laços fechados", 0/50 "número do grupo" (os 36
+    arrastar-e-encaixar e 9 grade completados são fora do escopo desta
+    técnica, não contam). Zero sucessos numa amostra de 224 tentativas
+    aplicáveis (bem maior que qualquer lote anterior) é evidência conclusiva
+    — mesmo com o bug da borda corrigido, a abordagem de CV clássica/OCR
+    como implementada aqui não resolve nenhum dos três subtipos. Combinado
+    com o histórico do solver via LLM (0/51, incluindo `gpt-6-astra`), os
+    três tipos de desafio canvas do hCaptcha permanecem sem solução nas duas
+    técnicas tentadas nesta sessão — uma conclusão legítima e documentável
+    para o estudo comparativo, não um problema a continuar perseguindo sem
+    nova direção.
     """
     driver = build_driver(BrowserConfig(headless=headless))
     try:
