@@ -5,11 +5,14 @@ Exemplo:
     python -m experiments.run_live_cli --target recaptcha --technique llm_vision --n 1
     python -m experiments.run_live_cli --target hcaptcha --n 3 --headed
     python -m experiments.run_live_cli --target hcaptcha --technique classical_cv --n 5
+    python -m experiments.run_live_cli --target hcaptcha --technique classical_cv --n 500 \
+        --pause-every 10 --pause-seconds 30
 """
 
 from __future__ import annotations
 
 import argparse
+import time
 from functools import partial
 
 from attacks.llm_vision_solver import MODEL_ID
@@ -53,6 +56,22 @@ def main() -> None:
             "Ignorado para outras técnicas/alvos."
         ),
     )
+    parser.add_argument(
+        "--pause-every",
+        type=int,
+        default=None,
+        help=(
+            "Pausa a execução depois de cada bloco de N tentativas completadas "
+            "(ver 'Escopo ético' no README — recomendado pra lotes grandes, "
+            "ex. --pause-every 10, pra não martelar a demo ao vivo continuamente)."
+        ),
+    )
+    parser.add_argument(
+        "--pause-seconds",
+        type=float,
+        default=30.0,
+        help="Duração da pausa (segundos) a cada --pause-every tentativas. Padrão: 30.",
+    )
     args = parser.parse_args()
 
     techniques = ATTEMPT_FNS[args.target]
@@ -66,6 +85,9 @@ def main() -> None:
     if techniques[args.technique] is hcaptcha_llm_vision_attempt:
         extra_kwargs["canvas_model"] = args.canvas_model
 
+    def _print_pause_progress(done: int, total: int) -> None:
+        print(f"[{done}/{total}] pausando {args.pause_seconds:.0f}s antes de continuar...")
+
     attempt_fn = partial(techniques[args.technique], headless=not args.headed, **extra_kwargs)
     results = run_experiment(
         target=args.target,
@@ -73,6 +95,10 @@ def main() -> None:
         evasion_profile="none",
         n_attempts=args.n,
         attempt_fn=attempt_fn,
+        pause_every=args.pause_every,
+        pause_seconds=args.pause_seconds,
+        sleep_fn=time.sleep,
+        on_pause=_print_pause_progress,
     )
 
     print(
