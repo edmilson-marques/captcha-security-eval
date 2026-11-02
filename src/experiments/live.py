@@ -714,17 +714,23 @@ def hcaptcha_llm_vision_attempt(
 
     **Resultado do lote oficial de 20 com `gpt-6-astra`: 0/10 no
     clique-sobre-canvas** (0/6 "ícone diferente", 0/4 "número que pertence
-    ao grupo" — este último especialmente notável, já que leitura de dígito
-    costuma ser um ponto forte de modelos de visão, não uma tarefa de
-    percepção ambígua como as outras duas). As 6 tentativas bem-sucedidas do
-    lote foram todas arrastar-e-encaixar (não afetado por este ciclo, usa
+    ao grupo" — na época pareceu notável, já que leitura de dígito costuma
+    ser ponto forte de modelos de visão; **achado posterior corrige essa
+    leitura** — ver docstring de
+    `attacks.classical_canvas_solver.solve_digit_membership_classical`:
+    inspeção direta de amostras reais mostrou os dígitos deliberadamente
+    ocultos atrás de um padrão denso de listras verticais, a mesma técnica
+    clássica de ofuscação de CAPTCHA de texto distorcido — não é um teto de
+    capacidade de leitura em geral, é um desafio especificamente projetado
+    pra derrotar reconhecimento de caractere). As 6 tentativas bem-sucedidas
+    do lote foram todas arrastar-e-encaixar (não afetado por este ciclo, usa
     `gpt-6.1-terra` sem mudança — 6/7 nesta amostra, variação normal de uma
     técnica que já funciona). Somando com o histórico, o clique-sobre-canvas
     fecha a sessão em **0/51 no total**, agora incluindo um teste com o
     modelo mais caro/capaz disponível. Com um modelo substancialmente mais
-    forte também não produzindo nenhum acerto — nem no tipo supostamente
-    mais fácil (leitura de dígito) — a hipótese de "modelo insuficientemente
-    capaz" perde força; o padrão observado é mais consistente com algo na
+    forte também não produzindo nenhum acerto — a hipótese de "modelo
+    insuficientemente capaz" perde força; o padrão observado é mais
+    consistente com algo na
     execução/verificação do desafio que nenhuma das correções testadas
     (resolução, prompt, modelo) ataca, ou com um aspecto do critério real
     ainda não identificado corretamente — não necessariamente "o modelo
