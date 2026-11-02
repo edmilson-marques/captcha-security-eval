@@ -31,11 +31,18 @@ from __future__ import annotations
 import base64
 import time
 
+import cv2
+import numpy as np
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 
+from attacks.classical_canvas_solver import (
+    solve_closed_loop_classical,
+    solve_digit_membership_classical,
+    solve_icon_outlier_classical,
+)
 from attacks.llm_vision_solver import (
     MODEL_ID,
     solve_canvas_points_by_consensus,
@@ -871,6 +878,124 @@ def hcaptcha_llm_vision_attempt(
         return {
             "outcome": "success" if succeeded else "failure",
             "sub_challenges": rounds_used,
+            "extra": extra,
+        }
+    finally:
+        driver.quit()
+
+
+def hcaptcha_classical_cv_attempt(
+    demo_url: str = HCAPTCHA_DEMO_URL,
+    headless: bool = True,
+) -> dict:
+    """Resolve o clique-sobre-canvas do hCaptcha via visão computacional clássica/OCR — sem LLM.
+
+    Pedido explícito do usuário depois do `gpt-6-astra` também não resolver
+    nenhum dos três tipos de desafio canvas (0/51 no total — ver docstring de
+    `hcaptcha_llm_vision_attempt`): parar de iterar em variações de prompt do
+    mesmo modelo e tentar uma técnica estruturalmente diferente. Usa
+    `attacks/classical_canvas_solver.py` (segmentação por borda via OpenCV +
+    OCR via Tesseract) em vez de pedir um julgamento qualitativo a um modelo
+    de visão — compatível com o escopo original da Atividade 2 do
+    cronograma, que já previa CV clássica como técnica a comparar.
+
+    **Escopo desta função é só os três tipos canvas** (ícone diferente,
+    laços fechados, número do grupo) — grade de imagens e arrastar-e-encaixar
+    já funcionam bem com `hcaptcha_llm_vision_attempt` (75%/~67% reais) e não
+    têm motivo pra trocar de técnica; aqui eles só confirmam sem tentar
+    resolver (`extra["technique_scope"] = "not_applicable"`), mesmo
+    comportamento do baseline — não é um bug, é delimitação de escopo.
+
+    Reaproveita a mesma captura em resolução nativa e o mesmo
+    `_infer_canvas_criterion_type` já usados pelo solver via LLM (mesma
+    conversão de coordenada nativa -> CSS antes de clicar, mesmo gotcha já
+    documentado lá). Ainda não validado ao vivo no momento em que este
+    docstring foi escrito — a prototipagem manual (ver `classical_cv.py`)
+    confirmou sinal razoável contra amostras reais salvas, mas o resultado
+    que importa é a taxa de sucesso medida ao vivo, não a prototipagem
+    offline (mesma prática já usada no resto do projeto).
+    """
+    driver = build_driver(BrowserConfig(headless=headless))
+    try:
+        wait = WebDriverWait(driver, 15)
+        driver.get(demo_url)
+
+        checkbox_iframe = wait.until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, HCAPTCHA_CHECKBOX_IFRAME_SELECTOR))
+        )
+        driver.switch_to.frame(checkbox_iframe)
+        checkbox = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#checkbox")))
+        checkbox.click()
+        driver.switch_to.default_content()
+
+        try:
+            challenge_iframe = WebDriverWait(driver, 6).until(
+                EC.visibility_of_element_located(
+                    (By.CSS_SELECTOR, HCAPTCHA_CHALLENGE_IFRAME_SELECTOR)
+                )
+            )
+        except TimeoutException:
+            driver.switch_to.frame(checkbox_iframe)
+            passed = (
+                driver.find_element(By.CSS_SELECTOR, "#checkbox").get_attribute("aria-checked")
+                == "true"
+            )
+            driver.switch_to.default_content()
+            return {"outcome": "success" if passed else "challenge_not_presented"}
+
+        driver.switch_to.frame(challenge_iframe)
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".challenge-container")))
+        prompt = driver.find_element(By.CSS_SELECTOR, ".prompt-text").text
+
+        tasks = driver.find_elements(By.CSS_SELECTOR, ".task")
+        extra: dict = {"prompt": prompt}
+
+        if tasks or "arrast" in prompt.lower():
+            extra["challenge_type"] = "grid" if tasks else "drag_puzzle"
+            extra["technique_scope"] = "not_applicable"
+        else:
+            canvas = driver.find_element(By.CSS_SELECTOR, "canvas")
+            canvas_wh = (canvas.size["width"], canvas.size["height"])
+            native_screenshot, native_scale = _canvas_native_screenshot(driver, canvas)
+            image = cv2.imdecode(np.frombuffer(native_screenshot, dtype=np.uint8), cv2.IMREAD_COLOR)
+            criterion_type = _infer_canvas_criterion_type(prompt)
+
+            if criterion_type == "closed_loop":
+                native_points = solve_closed_loop_classical(image)
+            elif criterion_type == "digit_membership":
+                point = solve_digit_membership_classical(image, prompt)
+                native_points = [point] if point else []
+            else:
+                point = solve_icon_outlier_classical(image)
+                native_points = [point] if point else []
+
+            css_points = [(x / native_scale, y / native_scale) for x, y in native_points]
+            for css_point in css_points:
+                click_canvas_point(driver, canvas, css_point, canvas_wh)
+                time.sleep(0.3)
+
+            extra.update(
+                {
+                    "challenge_type": "canvas_points",
+                    "criterion_type": criterion_type,
+                    "points": css_points,
+                }
+            )
+
+        driver.find_element(By.CSS_SELECTOR, ".button-submit").click()
+        time.sleep(2)
+        driver.switch_to.default_content()
+
+        driver.switch_to.frame(checkbox_iframe)
+        succeeded = (
+            driver.find_element(By.CSS_SELECTOR, "#checkbox").get_attribute("aria-checked")
+            == "true"
+        )
+        driver.switch_to.default_content()
+
+        return {
+            "outcome": "success" if succeeded else "failure",
+            "sub_challenges": 1,
             "extra": extra,
         }
     finally:
