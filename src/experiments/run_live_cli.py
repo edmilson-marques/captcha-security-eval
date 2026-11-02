@@ -86,7 +86,16 @@ def main() -> None:
         extra_kwargs["canvas_model"] = args.canvas_model
 
     def _print_pause_progress(done: int, total: int) -> None:
-        print(f"[{done}/{total}] pausando {args.pause_seconds:.0f}s antes de continuar...")
+        # `flush=True`: achado ao vivo em 2026-11-02 — sem isso, o progresso
+        # ficava preso no buffer interno do stdout quando a saída é
+        # redirecionada pra um arquivo (ex. tarefa em background de um lote
+        # longo), invisível até o processo encerrar. Lote de 500 tentativas
+        # continuou correto mesmo sem o flush (confirmado contando linhas do
+        # JSONL), mas a visibilidade de progresso em tempo real só funciona
+        # com o flush explícito.
+        print(
+            f"[{done}/{total}] pausando {args.pause_seconds:.0f}s antes de continuar...", flush=True
+        )
 
     attempt_fn = partial(techniques[args.technique], headless=not args.headed, **extra_kwargs)
     results = run_experiment(
