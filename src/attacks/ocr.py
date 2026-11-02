@@ -63,15 +63,22 @@ def locate_digit_candidates(image: np.ndarray, lang: str = "eng") -> list[dict]:
     OCR clássico em vez de julgamento de um modelo de visão.
 
     Usa `--psm 11` (texto esparso, sem ordem de leitura assumida — os
-    números aparecem soltos no canvas, não em frases) e restringe o
-    reconhecimento a dígitos (`tessedit_char_whitelist`), já que não há
-    texto não-numérico relevante nesse tipo de desafio. Retorna uma lista de
+    números aparecem soltos no canvas, não em frases). Retorna uma lista de
     `{"char": "8", "bbox": (x,y,w,h), "centroid": (cx,cy), "confidence": float}`,
     uma entrada por dígito reconhecido com confiança >= 0 (mesmo critério de
     `recognize_text_with_confidence` pra descartar entradas de layout sem
     texto).
+
+    **Achado ao vivo em 2026-11-02**: `tessedit_char_whitelist=0123456789`
+    (tentativa inicial, parecia a forma óbvia de restringir a dígitos) na
+    verdade **piora** a segmentação — o Tesseract passou a fundir dois
+    dígitos vizinhos ("8" e "2" lado a lado) num único token "82" em vez de
+    dois tokens separados, e com confiança 0 em vez da confiança real
+    (94 em ambos, testado sem o whitelist). Por isso a restrição a dígitos
+    é feita aqui em Python (`stripped.isdigit() and len(stripped) == 1`),
+    não via config do Tesseract.
     """
-    config = "--psm 11 -c tessedit_char_whitelist=0123456789"
+    config = "--psm 11"
     data = pytesseract.image_to_data(
         image, lang=lang, config=config, output_type=pytesseract.Output.DICT
     )
@@ -79,7 +86,7 @@ def locate_digit_candidates(image: np.ndarray, lang: str = "eng") -> list[dict]:
     candidates: list[dict] = []
     for i, text in enumerate(data["text"]):
         stripped = text.strip()
-        if not stripped or not stripped.isdigit():
+        if not stripped or not stripped.isdigit() or len(stripped) != 1:
             continue
         confidence = float(data["conf"][i])
         if confidence < 0:
