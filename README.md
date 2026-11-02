@@ -261,15 +261,66 @@ solvers que já funcionam). No caminho, descobri um **6º tipo de desafio**
 objetivamente verificável — diferente dos outros dois, não é julgamento
 perceptual subjetivo — e adicionei um `criterion_type="digit_membership"`
 dedicado antes de medir. **Resultado: 0/10** (0/6 ícone diferente, 0/4 número
-do grupo — este último notável, já que leitura de dígito costuma ser ponto
-forte de modelo de visão). Somando com o histórico, clique-sobre-canvas
-fecha a sessão em **0/51**. Um modelo substancialmente mais forte não
-acertar nem a tarefa mais objetiva (ler um dígito) enfraquece a hipótese de
-"modelo insuficiente" — o padrão agora sugere algo na execução/verificação
-do próprio desafio ainda não identificado, não necessariamente um teto de
+do grupo). Somando com o histórico, clique-sobre-canvas fecha a sessão em
+**0/51**. Um modelo substancialmente mais forte não acertar nem a tarefa
+aparentemente mais objetiva (ler um dígito) enfraquece a hipótese de "modelo
+insuficiente" — o padrão agora sugere algo na execução/verificação do
+próprio desafio ainda não identificado, não necessariamente um teto de
 capacidade do modelo. Bug real corrigido no caminho: `solve_puzzle_piece`
 também podia retornar `None` numa recusa sem tratamento (mesmo padrão já
 visto em `solve_canvas_points`).
+
+**Achado que corrige a leitura acima — "número do grupo" é anti-OCR
+deliberado, não uma tarefa fácil.** Inspecionando amostras reais direto do
+canvas (sem custo de API), os dígitos aparecem ocultos atrás de um padrão
+denso de listras verticais sobrepostas — a mesma técnica clássica de
+ofuscação de CAPTCHA de texto distorcido (von Ahn et al., citada no Cap. 3
+do TCC1), não texto limpo. Isso explica de forma mais completa por que
+tanto o LLM quanto o OCR clássico (ver próxima seção) tiveram dificuldade
+aqui — não é um teto de capacidade de leitura de dígito em geral.
+
+### Técnica alternativa sem LLM: visão computacional clássica + OCR
+
+A pedido explícito do usuário (parar de iterar em prompt do mesmo modelo e
+tentar algo estruturalmente diferente), implementei uma técnica nova —
+"classical_cv" — usando segmentação por borda (OpenCV) e OCR (Tesseract)
+em vez de um modelo de visão, em `attacks/classical_canvas_solver.py`
+(`solve_icon_outlier_classical`, `solve_closed_loop_classical`,
+`solve_digit_membership_classical`). Mesmo escopo dos três subtipos canvas
+que o solver via LLM não resolveu; grade e arrastar-e-encaixar continuam
+com o solver via LLM (já funcionam bem).
+
+```bash
+python -m experiments.run_live_cli --target hcaptcha --technique classical_cv --n 20
+```
+
+**Dois bugs reais encontrados e corrigidos via prototipagem manual contra
+amostras reais salvas, antes de qualquer tentativa ao vivo**: (1) um limiar
+de saturação de cor global não funciona — traços diferentes do mesmo
+desafio têm saturação bem diferente entre si; detecção por borda (Canny)
+deu sinal bem mais forte. (2) A captura nativa do canvas inclui uma faixa
+preta sólida no topo (área do cabeçalho, não desenhada no canvas) que
+confundia a detecção — corrigido com recorte automático da transição.
+
+**Lote oficial de 20 tentativas reais: 0/20** — revelou um **terceiro bug**,
+só visível ao vivo: a borda/moldura do próprio desafio tem poucos pixels
+(contorno fino) mas um bounding box gigante, passava no filtro de área e
+"vencia" como maior contraste em praticamente todo desafio real, mascarando
+os ícones de verdade (confirmado porque 4 desafios diferentes "detectavam"
+a mesma coordenada). Corrigido com um filtro de bounding box.
+
+**Lote de 500 tentativas com pausas de 30s a cada 10** (pedido do usuário,
+`--pause-every`/`--pause-seconds`, ver `experiments.runner.run_experiment`)
+— **interrompido pelo usuário em 271/500 ao ficar claro que não estava
+funcionando: 0 sucessos** em 224 tentativas aplicáveis (0/113 ícone
+diferente, 0/61 laços fechados, 0/50 número do grupo). Amostra bem maior
+que qualquer lote anterior, confirmando com mais confiança estatística que,
+mesmo com o bug da borda corrigido, CV clássica/OCR como implementada aqui
+também não resolve nenhum dos três subtipos. **Conclusão do estudo**: os
+três tipos de desafio canvas do hCaptcha permanecem sem solução nas duas
+técnicas tentadas (LLM de visão, incluindo modelo mais forte; CV
+clássica/OCR) — um resultado legítimo e documentável para a comparação,
+não um problema em aberto a continuar perseguindo sem uma direção nova.
 
 ## Rodando o OCR (opcional)
 
@@ -299,19 +350,16 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       primeiro, `image_grid_cnn/` não se aplica aos outros 3), cada um com solver
       próprio — puxado quase todo pelo arrastar-e-encaixar (16/24 nas quatro rodadas, ~67%);
       clique em ponto sobre canvas (ícone diferente, laços fechados, e um 6º tipo
-      descoberto, "número que pertence a um grupo") ficou em **0/51** mesmo depois de:
-      self-consistency por consenso espacial, instrumentação de evento JS (descartou bug
-      de execução — 100% `isTrusted=true`, coordenada exata), captura nativa do canvas (2x
-      resolução), prompt estruturado por tipo de critério, prompt nomeando explicitamente
-      "quebra de camuflagem de cor", e um modelo substancialmente mais forte
-      (`gpt-6-astra`, 10x mais caro). O modelo mais forte não acertar nem a tarefa mais
-      objetiva (ler um dígito) enfraquece a hipótese de "modelo insuficiente" — o padrão
-      sugere algo na execução/verificação do próprio desafio ainda não identificado.
-      **Falta**: ligar o Turnstile (precisa de página própria) e, se o usuário autorizar,
-      uma abordagem de visão computacional clássica (contraste de cor numérico via
-      `classical_cv.py`) ou investigação adicional de timing/staleness do canvas para o
-      clique-sobre-canvas. Rodar lotes maiores de coleta deve ter ritmo/volume combinado
-      com o orientador (ver "Escopo ético" acima).
+      descoberto, "número que pertence a um grupo") ficou em **0/51 via LLM** (incluindo
+      `gpt-6-astra`, 10x mais caro) **e 0/271 via CV clássica/OCR** (técnica alternativa sem
+      LLM, `attacks/classical_canvas_solver.py` — lote de 500 interrompido pelo usuário em
+      271 ao ficar claro que não funcionava), mesmo depois de corrigir 3 bugs reais de
+      execução ao longo do caminho (detecção de bot, faixa preta do cabeçalho, borda/moldura
+      do desafio mascarando os ícones). **Conclusão**: os três tipos canvas permanecem sem
+      solução nas duas técnicas tentadas — resultado legítimo e documentável pro estudo
+      comparativo. Arrastar-e-encaixar e grade continuam resolvidos pelo solver via LLM.
+      **Falta**: ligar o Turnstile (precisa de página própria). Rodar lotes maiores de
+      coleta deve ter ritmo/volume combinado com o orientador (ver "Escopo ético" acima).
 - [x] Atividade 7 — testes unitários (89 passed/3 skipped) + comparação das
       técnicas (`analysis/compare.py`) (Out-Nov/2026)
 - [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo
