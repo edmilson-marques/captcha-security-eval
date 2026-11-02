@@ -646,10 +646,39 @@ def hcaptcha_llm_vision_attempt(
     Smoke test de 5 tentativas reais após essas 3 mudanças: 4 "ícone
     diferente" (0/4, mesmo padrão de "só 2 ícones, sem maioria" no raciocínio
     de 3 delas) + 1 "challenge_not_presented" — nenhum erro de execução
-    (schema, Selenium, escala de coordenada). Insuficiente pra medir taxa de
-    sucesso (N pequeno de propósito, por acordo prévio de não rodar lote
-    grande sem perguntar primeiro) — lote oficial de validação ainda não
-    rodado nesta rodada.
+    (schema, Selenium, escala de coordenada).
+
+    **Ciclo 2 (2026-11-02): prompt nomeando "quebra de camuflagem" explicitamente
+    — não melhorou.** Com autorização do usuário, reformulei
+    `_CANVAS_CRITERION_PROMPTS["icon_outlier"]` pra descrever o critério
+    hipotetizado no ciclo 1 (contraste de cor com o fundo ao redor, não
+    comparação de maioria) e rodei o lote oficial de 20 tentativas reais.
+    **Resultado: 0/13 em "ícone diferente" e 0/5 em "laços fechados"** — a
+    única tentativa bem-sucedida do lote foi um "arrastar-e-encaixar"
+    (técnica não tocada neste ciclo). Somando com as tentativas anteriores da
+    sessão (0/23 antes de qualquer correção do ciclo 1), o clique-sobre-canvas
+    está em **0/41 no total**, mesmo depois de três correções independentes e
+    bem fundamentadas (resolução nativa, raciocínio estruturado, framing de
+    camuflagem nomeado explicitamente).
+
+    Isso é evidência mais forte do que antes de que o gargalo não é
+    engenharia de prompt — é uma limitação de capacidade perceptual do
+    modelo (`gpt-6.1-terra`) nesses dois tipos específicos de tarefa
+    (discriminação de contraste de cor contra um fundo; classificação de
+    topologia de curva), diferente da classificação semântica que ele já
+    faz bem na grade do reCAPTCHA e do raciocínio espacial que faz
+    razoavelmente bem no arrastar-e-encaixar. Hipótese (a) permanece líder,
+    agora com suporte de 3 correções negativas consecutivas, não só uma.
+
+    Caminhos ainda não tentados (não executados sem confirmação do
+    usuário): (i) trocar para um modelo mais forte (`gpt-6-astra`); (ii) uma
+    abordagem de visão computacional clássica — calcular a distância de cor
+    (ex. Delta-E) entre os pixels de cada ícone e o fundo imediatamente ao
+    redor dele, em vez de pedir ao modelo um julgamento qualitativo de
+    contraste — tecnicamente mais alinhado ao que o critério real parece
+    exigir (uma medida numérica de contraste, não uma descrição em texto) e
+    coerente com a infraestrutura de CV clássica já prevista no projeto
+    (`src/attacks/classical_cv.py`, Atividade 2).
     """
     driver = build_driver(BrowserConfig(headless=headless))
     try:

@@ -146,8 +146,8 @@ def test_solve_canvas_points_uses_icon_outlier_prompt_when_criterion_type_set():
     )
 
     prompt_text = client.responses.parse.call_args.kwargs["input"][0]["content"][0]["text"]
-    assert "enumere cada ícone/forma" in prompt_text
-    assert "visualmente diferente" in prompt_text
+    assert "camuflada" in prompt_text
+    assert "contraste" in prompt_text
 
 
 def test_solve_canvas_points_uses_closed_loop_prompt_when_criterion_type_set():

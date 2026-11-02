@@ -237,6 +237,22 @@ reCAPTCHA. Isso refina a causa provável do 0/23: não é imprecisão genérica,
 explicitamente. Fica como próxima correção candidata, não implementada
 ainda. Detalhamento completo na docstring de `hcaptcha_llm_vision_attempt`.
 
+**Ciclo 2: prompt de camuflagem explícito — não melhorou.** Com autorização
+do usuário, implementei a correção candidata (nomear "quebra de camuflagem
+de cor" direto no prompt de `icon_outlier`) e rodei o lote oficial de 20.
+**Resultado: 0/13 em "ícone diferente", 0/5 em "laços fechados"** — zero
+melhora. Somando com o histórico da sessão, o clique-sobre-canvas está em
+**0/41 no total**, mesmo depois de três correções independentes e bem
+fundamentadas (resolução nativa, raciocínio estruturado, framing de
+camuflagem). Isso é evidência mais forte de que o gargalo não é engenharia
+de prompt — é uma limitação de capacidade perceptual do modelo
+(`gpt-6.1-terra`) específica desses dois tipos de tarefa. Caminhos ainda não
+tentados, não executados sem autorização: (i) modelo mais forte
+(`gpt-6-astra`); (ii) abordagem de visão computacional clássica — calcular
+contraste de cor (ex. Delta-E) entre o ícone e o fundo ao redor numericamente
+em vez de pedir ao modelo um julgamento qualitativo, usando/estendendo
+`src/attacks/classical_cv.py` (Atividade 2).
+
 ## Rodando o OCR (opcional)
 
 `src/attacks/ocr.py` depende do binário de sistema `tesseract-ocr`. Se não estiver
@@ -263,17 +279,19 @@ sudo apt install -y tesseract-ocr tesseract-ocr-por
       acima). hCaptcha: 4 tipos de desafio distintos observados ao vivo (grade, ícone
       diferente, arrastar-e-encaixar, laços fechados — nenhum grade de tiles exceto o
       primeiro, `image_grid_cnn/` não se aplica aos outros 3), cada um com solver
-      próprio — puxado quase todo pelo arrastar-e-encaixar (9/15 nas duas rodadas, ~60%);
-      clique em ponto sobre canvas (ícone diferente + laços fechados) ficou em **0/23**
-      mesmo depois de tentar self-consistency por consenso espacial (mesma técnica que
-      funcionou na grade do reCAPTCHA). Instrumentação a nível de evento JS (listeners no
-      `<canvas>` real) descartou bug de execução — 100% `isTrusted=true`, coordenada
-      exata em todos os pontos testados — então a causa provável é um limite de precisão
-      visual do próprio modelo para esses dois tipos, não um bug de clique. **Falta**:
-      ligar o Turnstile (precisa de página própria) e, se fizer sentido, testar um modelo
-      mais forte ou outro pré-processamento de imagem para o clique-sobre-canvas. Rodar
-      lotes maiores de coleta deve ter ritmo/volume combinado com o orientador (ver
-      "Escopo ético" acima).
+      próprio — puxado quase todo pelo arrastar-e-encaixar (10/17 nas três rodadas, ~59%);
+      clique em ponto sobre canvas (ícone diferente + laços fechados) ficou em **0/41**
+      mesmo depois de: self-consistency por consenso espacial, instrumentação de evento JS
+      (descartou bug de execução — 100% `isTrusted=true`, coordenada exata), captura
+      nativa do canvas (2x resolução), prompt estruturado por tipo de critério, e prompt
+      nomeando explicitamente "quebra de camuflagem de cor". Três correções de prompt/
+      imagem independentes sem nenhum efeito é evidência forte de limitação de capacidade
+      perceptual do modelo para esses dois tipos específicos, não um problema de
+      engenharia de prompt. **Falta**: ligar o Turnstile (precisa de página própria) e, se
+      o usuário autorizar, testar um modelo mais forte (`gpt-6-astra`) ou uma abordagem de
+      visão computacional clássica (contraste de cor numérico via `classical_cv.py`) para
+      o clique-sobre-canvas. Rodar lotes maiores de coleta deve ter ritmo/volume combinado
+      com o orientador (ver "Escopo ético" acima).
 - [x] Atividade 7 — testes unitários (89 passed/3 skipped) + comparação das
       técnicas (`analysis/compare.py`) (Out-Nov/2026)
 - [ ] Atividade 8 — manutenção do pipeline (reativa, conforme forem surgindo
