@@ -41,6 +41,23 @@ def test_detect_stroke_regions_finds_both_shapes():
     assert mask.dtype == np.uint8
 
 
+def test_detect_stroke_regions_ignores_thin_border_spanning_whole_image():
+    # Achado ao vivo (2026-11-02): uma borda/moldura fina ao redor de todo o
+    # desafio tem poucos pixels (passa no filtro de área) mas um bounding
+    # box gigante — sem o filtro de bbox, ela "vence" como maior contraste
+    # em praticamente todo desafio real, mascarando os ícones de verdade.
+    image = _flat_background(color=(120, 120, 120))
+    cv2.rectangle(image, (2, 2), (297, 297), color=(255, 255, 255), thickness=3)
+    _draw_closed_circle(image, (150, 150), radius=20)
+
+    regions, _mask = classical_cv.detect_stroke_regions(image)
+
+    for region in regions:
+        _x, _y, w, h = region["bbox"]
+        assert w < 280
+        assert h < 280
+
+
 def test_detect_stroke_regions_ignores_components_above_max_area_ratio():
     image = _flat_background()
     # Um "traço" artificialmente enorme (quase a imagem inteira) deve ser
