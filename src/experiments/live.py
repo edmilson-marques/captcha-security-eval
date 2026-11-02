@@ -687,6 +687,41 @@ def hcaptcha_llm_vision_attempt(
     exigir (uma medida numérica de contraste, não uma descrição em texto) e
     coerente com a infraestrutura de CV clássica já prevista no projeto
     (`src/attacks/classical_cv.py`, Atividade 2).
+
+    **Ciclo 3 (2026-11-02): modelo mais forte (`gpt-6-astra`) — também não
+    melhorou.** Com autorização explícita do usuário, troquei só o modelo do
+    solver de clique-sobre-canvas via `canvas_model` (parâmetro novo desta
+    função, repassado como `model` a `solve_canvas_points_by_consensus`;
+    `gpt-6.1-terra` continua padrão, e os outros solvers — grade, arrastar-e-
+    -encaixar — não foram tocados). No smoke test, descobri um **6º tipo de
+    desafio** não catalogado antes, "Clique no número que pertence a este
+    grupo: 789" — diferente de ícone-diferente/laços-fechados, tem resposta
+    objetivamente verificável (o dígito exato pertence ou não ao conjunto
+    citado, não é julgamento perceptual subjetivo); adicionei
+    `criterion_type="digit_membership"` com prompt próprio antes do lote
+    oficial, pra não confundir a medição do modelo com um prompt genérico
+    mal ajustado a esse tipo. Também corrigi, no mesmo smoke test, um
+    `AttributeError` opaco em `solve_puzzle_piece` (mesma causa já conhecida
+    de `solve_canvas_points`: recusa pode retornar `None` em vez de schema
+    preenchido) — nunca tinha sido protegido nesse caminho.
+
+    **Resultado do lote oficial de 20 com `gpt-6-astra`: 0/10 no
+    clique-sobre-canvas** (0/6 "ícone diferente", 0/4 "número que pertence
+    ao grupo" — este último especialmente notável, já que leitura de dígito
+    costuma ser um ponto forte de modelos de visão, não uma tarefa de
+    percepção ambígua como as outras duas). As 6 tentativas bem-sucedidas do
+    lote foram todas arrastar-e-encaixar (não afetado por este ciclo, usa
+    `gpt-6.1-terra` sem mudança — 6/7 nesta amostra, variação normal de uma
+    técnica que já funciona). Somando com o histórico, o clique-sobre-canvas
+    fecha a sessão em **0/51 no total**, agora incluindo um teste com o
+    modelo mais caro/capaz disponível. Com um modelo substancialmente mais
+    forte também não produzindo nenhum acerto — nem no tipo supostamente
+    mais fácil (leitura de dígito) — a hipótese de "modelo insuficientemente
+    capaz" perde força; o padrão observado é mais consistente com algo na
+    execução/verificação do desafio que nenhuma das correções testadas
+    (resolução, prompt, modelo) ataca, ou com um aspecto do critério real
+    ainda não identificado corretamente — não necessariamente "o modelo
+    nunca vai conseguir isso".
     """
     driver = build_driver(BrowserConfig(headless=headless))
     try:
