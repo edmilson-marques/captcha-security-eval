@@ -63,9 +63,17 @@ from harness.collectors.recaptcha_collector import (
     CHALLENGE_IFRAME_SELECTOR as RECAPTCHA_CHALLENGE_IFRAME_SELECTOR,
 )
 from harness.humanized_actions import click_canvas_point, drag_canvas_point
+from harness.turnstile_test_server import TurnstileTestServer
 
 RECAPTCHA_DEMO_URL = "https://www.google.com/recaptcha/api2/demo"
 HCAPTCHA_DEMO_URL = "https://accounts.hcaptcha.com/demo"
+
+# Sitekeys de teste oficiais da Cloudflare (developers.cloudflare.com/turnstile/
+# troubleshooting/testing/) — ver config/targets.yaml e harness/turnstile_test_server.py
+# pra entender por que não há uma demo_url fixa como reCAPTCHA/hCaptcha.
+TURNSTILE_SITEKEY_ALWAYS_PASS = "1x00000000000000000000AA"
+TURNSTILE_SITEKEY_ALWAYS_BLOCK = "2x00000000000000000000AB"
+TURNSTILE_SITEKEY_FORCE_INTERACTIVE = "3x00000000000000000000FF"
 
 
 def _canvas_native_screenshot(driver, canvas) -> tuple[bytes, float]:
@@ -1023,3 +1031,92 @@ def hcaptcha_classical_cv_attempt(
         }
     finally:
         driver.quit()
+
+
+def turnstile_behavioral_attempt(
+    sitekey: str = TURNSTILE_SITEKEY_ALWAYS_PASS,
+    headless: bool = True,
+    settle_seconds: float = 6.0,
+) -> dict:
+    """Mede o resultado (pass/bloqueio/desafio) de um widget Cloudflare Turnstile real.
+
+    Fecha o gap documentado desde o início do projeto: diferente do
+    reCAPTCHA/hCaptcha, a Cloudflare não mantém uma demo oficial full-page
+    (ver `config/targets.yaml`). Por isso esta função serve uma página local
+    mínima (`harness.turnstile_test_server.TurnstileTestServer`) embutindo o
+    script oficial do widget com uma *sitekey de teste* publicada pela
+    própria Cloudflare — funciona em qualquer origem, sem precisar de conta/
+    domínio próprios.
+
+    **Esta função não "resolve" nada** (coerente com o desenho original de
+    `attacks/turnstile_behavioral.py`): o Turnstile raramente mostra um
+    desafio visual a tráfego legítimo, então a técnica de ataque relevante
+    aqui é medir a taxa de pass/desafio/bloqueio sob perfis de evasão
+    diferentes, não resolver um puzzle.
+
+    **Detecção via callbacks JS oficiais, não inspeção de DOM**: o widget
+    renderiza sua UI (texto, checkbox, logo) sem nenhum `<iframe>` nem
+    elemento acessível via `querySelectorAll`/`innerHTML` — confirmado ao
+    vivo em 2026-11-02 testando `element.shadowRoot` (sempre `null`) em
+    todos os elementos da página. Consistente com **Shadow DOM fechado**
+    (técnica legítima anti-adulteração, não um bug daqui — um shadow root
+    "closed" é inacessível via JS externo por desenho do navegador). Por
+    isso a página de teste registra `data-callback`/`data-error-callback`
+    (API oficial do Turnstile) em vez de tentar encontrar elementos —
+    verificado ao vivo que os dois disparam corretamente antes de escrever
+    esta função (ver `harness/turnstile_test_server.py`).
+
+    Mapeamento de outcome (`experiments.metrics.VALID_OUTCOMES`): token
+    emitido (`data-callback` disparou) -> `"success"`; erro reportado
+    (`data-error-callback` disparou) -> `"blocked"` (valor dedicado do
+    enum, mais preciso que `"failure"` genérico); nenhum dos dois depois de
+    `settle_seconds` -> `"failure"` com `extra["widget_state"] =
+    "interactive_challenge_pending"` (um desafio interativo real apareceu —
+    ver sitekey `TURNSTILE_SITEKEY_FORCE_INTERACTIVE` — e esta função
+    deliberadamente não tenta resolvê-lo, mesma filosofia de
+    `*_baseline_attempt` nos outros alvos: mede o que acontece sem atacar).
+
+    **Validado ao vivo em 2026-11-02 contra as 3 sitekeys de teste**:
+    `sempre_passa` -> `success` com token `"XXXX.DUMMY.TOKEN.XXXX"`;
+    `sempre_bloqueia` -> `blocked` com código de erro `"600010"`;
+    `sempre_força_desafio` -> nenhum callback dispara (desafio interativo
+    visível, não resolvido).
+
+    **Limitação importante**: sitekeys de teste têm comportamento FIXO —
+    validam que o pipeline de coleta/medição funciona de verdade (objetivo
+    desta função), não medem a robustez real do Turnstile, que reage a
+    sinais comportamentais genuínos do navegador. Medir robustez real
+    exige uma sitekey Cloudflare própria do aluno em modo Managed (passo
+    que só o aluno pode fazer, documentado em `config/targets.yaml`) — essa
+    função já aceita qualquer `sitekey`, então o único passo que falta,
+    quando o aluno tiver uma sitekey real, é trocar o valor do parâmetro.
+    """
+    with TurnstileTestServer(sitekey) as url:
+        driver = build_driver(BrowserConfig(headless=headless))
+        try:
+            driver.get(url)
+            time.sleep(settle_seconds)
+            result = driver.execute_script("return window.__turnstileResult;")
+        finally:
+            driver.quit()
+
+    token = result.get("success")
+    error_code = result.get("error")
+
+    if token:
+        return {
+            "outcome": "success",
+            "sub_challenges": 0,
+            "extra": {"sitekey": sitekey, "token": token},
+        }
+    if error_code:
+        return {
+            "outcome": "blocked",
+            "sub_challenges": 0,
+            "extra": {"sitekey": sitekey, "error_code": error_code},
+        }
+    return {
+        "outcome": "failure",
+        "sub_challenges": 1,
+        "extra": {"sitekey": sitekey, "widget_state": "interactive_challenge_pending"},
+    }
