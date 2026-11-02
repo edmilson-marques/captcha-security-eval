@@ -205,6 +205,38 @@ forte (`gpt-6-astra`) ou outro pré-processamento de imagem mudaria isso.
 Detalhamento completo na docstring de `hcaptcha_llm_vision_attempt` e de
 `harness/humanized_actions.py`.
 
+### Ciclo de diagnóstico estruturado (/loop) — 3 correções + achado sobre camuflagem
+
+A pedido do usuário, apliquei um roteiro formal de diagnóstico ao problema
+acima (≥3 hipóteses de causa raiz, ≥3 correções por hipótese, escolha
+justificada evitando overengineering). Implementei e testei (smoke test,
+sem lote oficial ainda — combinado previamente não rodar lote grande nem
+trocar de modelo sem perguntar antes):
+
+1. **Captura nativa do canvas** (`toDataURL` em vez de `screenshot_as_png`)
+   — valida sem `SecurityError`, ganho real de resolução (2x no caso
+   observado). Gotcha: muda o espaço de coordenada, exige escalar antes de
+   clicar (`native_scale` em `_canvas_native_screenshot`).
+2. **Prompt especializado por tipo de critério** (`icon_outlier` /
+   `closed_loop`) com raciocínio estruturado (enumerar → comparar/classificar
+   → responder), em vez do prompt genérico único de antes.
+3. **Campo `elements_considered`** na resposta, só para auditoria.
+
+**Achado novo, mais importante que as 3 correções em si**: inspecionando as
+imagens nativas diretamente, confirmei que "ícone diferente" mostra
+consistentemente só **2 ícones** por desafio — não um grupo com maioria e um
+intruso, como o nome sugere. Com só 2 candidatos, não há "maioria" pra
+comparar; o padrão observado (nas 3 amostras inspecionadas e no próprio
+raciocínio do modelo, que às vezes verbaliza "não há uma maioria de
+referência") sugere que o critério real é **quebra de camuflagem de cor**
+(qual dos dois ícones destoa da paleta do fundo decorativo vs. qual foi
+colorido pra se camuflar nela) — uma habilidade perceptual distinta de
+classificação semântica, que é o que o modelo já faz bem na grade do
+reCAPTCHA. Isso refina a causa provável do 0/23: não é imprecisão genérica,
+é um tipo de percepção visual específico que o prompt ainda não nomeia
+explicitamente. Fica como próxima correção candidata, não implementada
+ainda. Detalhamento completo na docstring de `hcaptcha_llm_vision_attempt`.
+
 ## Rodando o OCR (opcional)
 
 `src/attacks/ocr.py` depende do binário de sistema `tesseract-ocr`. Se não estiver

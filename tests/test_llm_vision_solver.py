@@ -109,7 +109,9 @@ def test_solve_puzzle_piece_returns_parsed_answer_and_builds_correct_request():
 
 def test_solve_canvas_points_returns_parsed_answer_and_builds_correct_request():
     expected = CanvasPointsAnswer(
-        points=[CanvasPoint(x=123, y=45)], reasoning="ícone diferente no canto superior"
+        elements_considered=2,
+        points=[CanvasPoint(x=123, y=45)],
+        reasoning="ícone diferente no canto superior",
     )
     client = _fake_client(expected)
 
@@ -128,6 +130,59 @@ def test_solve_canvas_points_returns_parsed_answer_and_builds_correct_request():
     assert "ícone que é diferente" in content[0]["text"]
     assert "Confirmar" not in content[0]["text"]
     assert content[1]["type"] == "input_image"
+
+
+def test_solve_canvas_points_uses_icon_outlier_prompt_when_criterion_type_set():
+    expected = CanvasPointsAnswer(
+        elements_considered=2, points=[CanvasPoint(x=1, y=1)], reasoning="x"
+    )
+    client = _fake_client(expected)
+
+    solve_canvas_points(
+        screenshot_png=b"fake-png-bytes",
+        instruction="Clique no ícone que é diferente",
+        criterion_type="icon_outlier",
+        client=client,
+    )
+
+    prompt_text = client.responses.parse.call_args.kwargs["input"][0]["content"][0]["text"]
+    assert "enumere cada ícone/forma" in prompt_text
+    assert "visualmente diferente" in prompt_text
+
+
+def test_solve_canvas_points_uses_closed_loop_prompt_when_criterion_type_set():
+    expected = CanvasPointsAnswer(
+        elements_considered=3, points=[CanvasPoint(x=1, y=1)], reasoning="x"
+    )
+    client = _fake_client(expected)
+
+    solve_canvas_points(
+        screenshot_png=b"fake-png-bytes",
+        instruction="Clique em todos os laços fechados",
+        criterion_type="closed_loop",
+        client=client,
+    )
+
+    prompt_text = client.responses.parse.call_args.kwargs["input"][0]["content"][0]["text"]
+    assert "FECHADO" in prompt_text
+    assert "ABERTO" in prompt_text
+
+
+def test_solve_canvas_points_falls_back_to_generic_prompt_for_unknown_criterion_type():
+    expected = CanvasPointsAnswer(
+        elements_considered=1, points=[CanvasPoint(x=1, y=1)], reasoning="x"
+    )
+    client = _fake_client(expected)
+
+    solve_canvas_points(
+        screenshot_png=b"fake-png-bytes",
+        instruction="Clique em algo bem estranho",
+        criterion_type="um_tipo_nao_catalogado",
+        client=client,
+    )
+
+    prompt_text = client.responses.parse.call_args.kwargs["input"][0]["content"][0]["text"]
+    assert "desenhado livremente" in prompt_text
 
 
 def test_solve_recaptcha_grid_by_majority_vote_keeps_only_majority_indices():
@@ -211,9 +266,15 @@ def test_solve_recaptcha_grid_by_majority_vote_single_vote_matches_plain_call():
 
 def test_solve_canvas_points_by_consensus_keeps_only_clusters_with_majority_support():
     answers = [
-        CanvasPointsAnswer(points=[CanvasPoint(x=100, y=100)], reasoning="voto 1"),
-        CanvasPointsAnswer(points=[CanvasPoint(x=110, y=95)], reasoning="voto 2"),
-        CanvasPointsAnswer(points=[CanvasPoint(x=400, y=400)], reasoning="voto 3"),
+        CanvasPointsAnswer(
+            elements_considered=3, points=[CanvasPoint(x=100, y=100)], reasoning="voto 1"
+        ),
+        CanvasPointsAnswer(
+            elements_considered=3, points=[CanvasPoint(x=110, y=95)], reasoning="voto 2"
+        ),
+        CanvasPointsAnswer(
+            elements_considered=3, points=[CanvasPoint(x=400, y=400)], reasoning="voto 3"
+        ),
     ]
     client = MagicMock()
     client.responses.parse.side_effect = [MagicMock(output_parsed=a) for a in answers]
@@ -236,10 +297,14 @@ def test_solve_canvas_points_by_consensus_keeps_only_clusters_with_majority_supp
 def test_solve_canvas_points_by_consensus_handles_multiple_surviving_clusters():
     answers = [
         CanvasPointsAnswer(
-            points=[CanvasPoint(x=50, y=50), CanvasPoint(x=300, y=300)], reasoning="voto 1"
+            elements_considered=4,
+            points=[CanvasPoint(x=50, y=50), CanvasPoint(x=300, y=300)],
+            reasoning="voto 1",
         ),
         CanvasPointsAnswer(
-            points=[CanvasPoint(x=56, y=48), CanvasPoint(x=306, y=296)], reasoning="voto 2"
+            elements_considered=4,
+            points=[CanvasPoint(x=56, y=48), CanvasPoint(x=306, y=296)],
+            reasoning="voto 2",
         ),
     ]
     client = MagicMock()
@@ -257,7 +322,9 @@ def test_solve_canvas_points_by_consensus_handles_multiple_surviving_clusters():
 
 
 def test_solve_canvas_points_by_consensus_tolerates_partial_failures():
-    good_answer = CanvasPointsAnswer(points=[CanvasPoint(x=10, y=20)], reasoning="voto bom")
+    good_answer = CanvasPointsAnswer(
+        elements_considered=1, points=[CanvasPoint(x=10, y=20)], reasoning="voto bom"
+    )
     client = MagicMock()
     client.responses.parse.side_effect = [
         RuntimeError("falha transitória da API"),
@@ -279,7 +346,9 @@ def test_solve_canvas_points_by_consensus_tolerates_partial_failures():
 def test_solve_canvas_points_by_consensus_tolerates_none_response():
     # Achado ao vivo: uma recusa pode fazer output_parsed vir None (em vez de
     # um CanvasPointsAnswer com points=[]) — não deve derrubar a votação.
-    good_answer = CanvasPointsAnswer(points=[CanvasPoint(x=30, y=40)], reasoning="voto bom")
+    good_answer = CanvasPointsAnswer(
+        elements_considered=2, points=[CanvasPoint(x=30, y=40)], reasoning="voto bom"
+    )
     client = MagicMock()
     client.responses.parse.side_effect = [
         MagicMock(output_parsed=None),
@@ -298,7 +367,9 @@ def test_solve_canvas_points_by_consensus_tolerates_none_response():
 
 
 def test_solve_canvas_points_by_consensus_single_vote_matches_plain_call():
-    expected = CanvasPointsAnswer(points=[CanvasPoint(x=7, y=8)], reasoning="só um voto")
+    expected = CanvasPointsAnswer(
+        elements_considered=1, points=[CanvasPoint(x=7, y=8)], reasoning="só um voto"
+    )
     client = _fake_client(expected)
 
     result = solve_canvas_points_by_consensus(
