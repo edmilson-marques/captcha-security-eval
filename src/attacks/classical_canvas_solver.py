@@ -116,6 +116,32 @@ def solve_closed_loop_classical(
     `classify_loop_closure` pra decidir, por candidato, se ele cerca uma
     área interna (fração >= `closure_threshold`) ou não. Lista vazia se
     nenhum traço for classificado como fechado.
+
+    **Investigação ao vivo em 2026-11-04 (revertida, documentada por
+    transparência)**: observando o navegador aberto, o usuário notou esta
+    técnica marcando errado contra um desafio real de 5 traços (1 fechado,
+    4 abertos, incluindo duas curvas em "S" com várias dobras). Diagnóstico
+    revelou **4 causas-raiz distintas**, nenhuma resolvida de forma
+    robusta: (1) a máscara de borda funde traços próximos numa única
+    região -- 3 traços viraram 1 bbox; (2) uma máscara alternativa por
+    saturação de cor separa melhor os traços, mas corta o trecho de baixa
+    saturação de um degradê (ex. do amarelo ao roxo no mesmo laço),
+    fazendo um laço de verdade fechado perder justamente o trecho que o
+    fecharia; (3) a união das duas máscaras melhora a segmentação da
+    amostra real, mas, sem fechamento morfológico (que reintroduziria a
+    fusão), **reduz a espessura efetiva do traço marcado**, o que desloca
+    sistematicamente a métrica de fechamento pra baixo -- o mesmo círculo
+    sintético usado nos testes (`tests/test_classical_cv_canvas.py`), que
+    sempre pontuou corretamente como fechado com a máscara de borda
+    (0.58), caiu pra 0.31 (abaixo até do limiar antigo) só por trocar de
+    máscara, quebrando o teste de regressão; (4) a métrica de "fração
+    cercada" por si só pontua curvas abertas em "S" acima de 0.5 por causa
+    da própria ondulação, não por erro de segmentação. Qualquer limiar
+    fixo testado corrigia uma amostra à custa de regredir outra -- não foi
+    encontrado um ajuste que generalizasse. Mudança revertida pra não
+    regredir o comportamento já validado; as 4 causas ficam documentadas
+    aqui como o achado mais completo do estudo sobre por que "laços
+    fechados" resiste também a esta técnica.
     """
     image, y_offset = _crop_black_header(image)
     regions, mask = detect_stroke_regions(image)
@@ -171,3 +197,47 @@ def solve_digit_membership_classical(image: np.ndarray, instruction: str) -> tup
     best = max(matching, key=lambda c: c["confidence"])
     cx, cy = best["centroid"]
     return (round(cx), round(cy) + y_offset)
+
+
+def solve_digit_membership_temporal(
+    frames: list[np.ndarray], instruction: str
+) -> tuple[int, int] | None:
+    """Repete `solve_digit_membership_classical` sobre uma rajada de frames.
+
+    **Achado ao vivo em 2026-11-04** (observação do usuário assistindo o
+    navegador aberto, confirmada capturando 10 frames nativos do mesmo
+    desafio ao longo de ~5s): os dígitos ocultos atrás do padrão de listras
+    (ver `solve_digit_membership_classical`) não ficam parados -- cada um
+    deriva de posição e escala ao longo do tempo, o mesmo tipo de animação
+    já documentado em "ícone diferente"
+    (`attacks.temporal_canvas_solver`), e a legibilidade varia muito de
+    frame pra frame. Numa rajada real de 10 frames, o OCR só conseguiu ler
+    algum dígito em 2 dos 10, e só 1 desses coincidiu com um dígito do
+    grupo-alvo (confiança 73) -- uma única captura tem uma chance real de
+    cair exatamente num instante sem nenhuma leitura possível, independente
+    da qualidade do OCR em si.
+
+    Roda `locate_digit_candidates` em cada frame e fica com a leitura de
+    maior confiança entre as que batem com `target_digits`, em qualquer
+    frame da rajada -- `None` se nenhum frame tiver uma leitura válida.
+    **Ainda não validado ao vivo contra um clique real** -- só confirma que
+    a técnica lê o dígito certo com mais frequência que uma captura única,
+    não que clicar resolve o desafio.
+    """
+    target_digits = _parse_target_digits(instruction)
+    if not target_digits:
+        return None
+
+    best_point: tuple[int, int] | None = None
+    best_confidence = -1.0
+    for frame in frames:
+        cropped, y_offset = _crop_black_header(frame)
+        for candidate in locate_digit_candidates(cropped):
+            if candidate["char"] not in target_digits:
+                continue
+            if candidate["confidence"] > best_confidence:
+                best_confidence = candidate["confidence"]
+                cx, cy = candidate["centroid"]
+                best_point = (round(cx), round(cy) + y_offset)
+
+    return best_point

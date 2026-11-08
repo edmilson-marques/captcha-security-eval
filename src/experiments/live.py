@@ -38,17 +38,22 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 
+from attacks.canvas_click_cnn.solver import solve_closed_loop_cnn
 from attacks.classical_canvas_solver import (
     solve_closed_loop_classical,
-    solve_digit_membership_classical,
+    solve_digit_membership_temporal,
     solve_icon_outlier_classical,
 )
+from attacks.grid_interaction import click_grid_tiles
+from attacks.identical_elements_solver import solve_identical_elements_classical
+from attacks.image_grid_cnn.solver import resolve_checkpoint, solve_recaptcha_grid_cnn
 from attacks.llm_vision_solver import (
     MODEL_ID,
     solve_canvas_points_by_consensus,
     solve_puzzle_piece,
-    solve_recaptcha_grid_by_majority_vote,
 )
+from attacks.recaptcha_adaptive_vote import solve_recaptcha_grid_adaptive_vote
+from attacks.temporal_canvas_solver import solve_icon_outlier_temporal
 from harness.browser import BrowserConfig, build_driver
 from harness.collectors.hcaptcha_collector import (
     CHALLENGE_IFRAME_SELECTOR as HCAPTCHA_CHALLENGE_IFRAME_SELECTOR,
@@ -63,7 +68,14 @@ from harness.collectors.recaptcha_collector import (
     CHALLENGE_IFRAME_SELECTOR as RECAPTCHA_CHALLENGE_IFRAME_SELECTOR,
 )
 from harness.humanized_actions import click_canvas_point, drag_canvas_point
+from harness.storage import save_attempt_capture
 from harness.turnstile_test_server import TurnstileTestServer
+
+# Nº de screenshots e intervalo entre eles pra `solve_icon_outlier_temporal`
+# (ver docstring de `attacks.temporal_canvas_solver` -- validado offline com
+# 8 frames/0.5s = ~4s de rajada contra 1 captura real).
+ICON_OUTLIER_BURST_FRAMES = 8
+ICON_OUTLIER_BURST_INTERVAL_SECONDS = 0.5
 
 RECAPTCHA_DEMO_URL = "https://www.google.com/recaptcha/api2/demo"
 HCAPTCHA_DEMO_URL = "https://accounts.hcaptcha.com/demo"
@@ -123,15 +135,117 @@ def _infer_canvas_criterion_type(prompt: str) -> str | None:
     subjetivo). Retorna `None` pra qualquer prompt não reconhecido, caindo
     no prompt genérico de `solve_canvas_points` — não quebra pra tipos de
     desafio ainda não catalogados.
+
+    **Bug real encontrado e corrigido em 2026-11-04**: a palavra "padrão"
+    sozinha também disparava `"icon_outlier"`, o que classificava errado um
+    7º tipo de desafio ainda não catalogado ("Coloque o item correto para
+    completar o padrão" -- uma grade de arrastar-e-soltar, visualmente nada
+    parecido com os dois ícones do "ícone diferente") como se fosse
+    clique-sobre-canvas de ícone. Descoberto rotulando dados reais pro CNN
+    de `attacks/canvas_click_cnn/` e confirmado de novo num lote ao vivo do
+    `hcaptcha_combined_attempt` (3 das 6 tentativas marcadas
+    `criterion_type="icon_outlier"` eram na real esse outro desafio).
+    Mantido só "quebra" (cobre "a figura que quebra o padrão") -- esse
+    7º tipo agora cai em `None` e é tratado como fora de escopo (ver
+    `hcaptcha_combined_attempt`/`hcaptcha_classical_cv_attempt`), não mais
+    forçado em "icon_outlier". **Limitação que fica**: números históricos
+    de "ícone diferente" documentados antes desta correção (ex. no README)
+    podem incluir uma fração pequena e não quantificada de tentativas que
+    eram, na real, esse outro tipo -- não dá pra separar
+    retroativamente sem reprocessar os `.jsonl` brutos.
     """
     lowered = prompt.lower()
     if "laç" in lowered or "loop" in lowered:
         return "closed_loop"
     if "pertence" in lowered or "grupo" in lowered:
         return "digit_membership"
-    if "diferente" in lowered or "quebra" in lowered or "padrão" in lowered:
+    if "idêntic" in lowered or "identic" in lowered:
+        # 8º tipo, achado no lote real de 100 tentativas de 2026-11-04
+        # ("Por favor, clique nos elementos que são idênticos") -- tão comum
+        # quanto digit_membership (31% vs 41% da amostra), ver
+        # attacks.identical_elements_solver.
+        return "identical_elements"
+    if "diferente" in lowered or "quebra" in lowered:
         return "icon_outlier"
     return None
+
+
+# Nº máximo de rodadas que uma tentativa de clique-sobre-canvas tenta de
+# novo o mesmo tipo de desafio antes de desistir (ver `_submit_round_and_check`).
+HCAPTCHA_CANVAS_MAX_ROUNDS = 3
+
+
+def _submit_round_and_check(driver, checkbox_iframe) -> str:
+    """Clica `.button-submit` e classifica o resultado real da rodada.
+
+    **Achado ao vivo em 2026-11-04** (observação do usuário, confirmada
+    comparando o hash do canvas antes/depois do submit): ao submeter uma
+    resposta errada num desafio de clique-sobre-canvas, o hCaptcha **não
+    rejeita na hora** -- ele reapresenta o mesmo tipo de desafio com
+    conteúdo regenerado (mesmo prompt, imagem nova), dando outra chance,
+    dentro do mesmo widget. Até esta correção, toda função de hCaptcha
+    conferia o resultado **uma única vez** (`time.sleep(2)` fixo seguido de
+    checar `aria-checked`) e tratava "ainda não aceito" como falha
+    definitiva, sem nunca tentar a rodada regenerada -- um gargalo
+    estrutural que pode explicar boa parte do 0% histórico em
+    "ícone diferente"/"laços fechados"/"número do grupo"/"elementos
+    idênticos", muito mais do que só precisão do solver.
+
+    Retorna `"success"` (`aria-checked="true"`), `"rejected"` (o widget
+    fechou de vez, sem desafio novo -- rejeição real) ou `"retry"` (ainda
+    há um `.challenge-container` visível, mesmo tipo de desafio
+    regenerado). Em `"retry"`, o driver fica posicionado **dentro** do
+    `challenge_iframe` de novo, pronto pra resolver a rodada seguinte; em
+    `"success"`/`"rejected"`, fica em `default_content`.
+    """
+    driver.find_element(By.CSS_SELECTOR, ".button-submit").click()
+    time.sleep(2)
+
+    driver.switch_to.default_content()
+    driver.switch_to.frame(checkbox_iframe)
+    succeeded = (
+        driver.find_element(By.CSS_SELECTOR, "#checkbox").get_attribute("aria-checked") == "true"
+    )
+    driver.switch_to.default_content()
+    if succeeded:
+        return "success"
+
+    try:
+        challenge_iframe = WebDriverWait(driver, 3).until(
+            EC.visibility_of_element_located((By.CSS_SELECTOR, HCAPTCHA_CHALLENGE_IFRAME_SELECTOR))
+        )
+    except TimeoutException:
+        return "rejected"
+
+    driver.switch_to.frame(challenge_iframe)
+    if not driver.find_elements(By.CSS_SELECTOR, ".challenge-container"):
+        driver.switch_to.default_content()
+        return "rejected"
+    return "retry"
+
+
+def _capture_canvas_burst(
+    driver,
+    canvas,
+    n_frames: int = ICON_OUTLIER_BURST_FRAMES,
+    interval_seconds: float = ICON_OUTLIER_BURST_INTERVAL_SECONDS,
+) -> tuple[list[np.ndarray], float]:
+    """Captura `n_frames` screenshots nativos do mesmo `canvas`, espaçados no tempo.
+
+    Usado pelos solvers temporais (`solve_icon_outlier_temporal`,
+    `attacks.classical_canvas_solver.solve_digit_membership_temporal`) --
+    achados ao vivo em 2026-11-04 mostraram que tanto o "ícone diferente"
+    quanto o dígito oculto por listras em "número do grupo" derivam de
+    posição/escala ao longo do tempo, então uma única captura tem chance
+    real de cair num instante sem nada legível. Retorna `(frames, native_scale)`.
+    """
+    frames = []
+    native_scale = 1.0
+    for _ in range(n_frames):
+        screenshot, native_scale = _canvas_native_screenshot(driver, canvas)
+        frames.append(cv2.imdecode(np.frombuffer(screenshot, dtype=np.uint8), cv2.IMREAD_COLOR))
+        time.sleep(interval_seconds)
+    return frames, native_scale
 
 
 def recaptcha_baseline_attempt(demo_url: str = RECAPTCHA_DEMO_URL, headless: bool = True) -> dict:
@@ -176,6 +290,12 @@ def recaptcha_baseline_attempt(demo_url: str = RECAPTCHA_DEMO_URL, headless: boo
         instruction = driver.find_element(
             By.CSS_SELECTOR, ".rc-imageselect-desc-wrapper, .rc-imageselect-instructions"
         ).text
+        tiles = driver.find_elements(By.CSS_SELECTOR, "td.rc-imageselect-tile")
+        grid_size = round(len(tiles) ** 0.5)
+        # Captura o grid pra formar repertório real de treino (CNN, ver
+        # attacks/image_grid_cnn/) -- técnica sem LLM, precisa de dado real
+        # rotulado, e esta função já navega até o desafio sem custo de API.
+        grid_screenshot = driver.find_element(By.CSS_SELECTOR, "table").screenshot_as_png
         driver.find_element(By.ID, "recaptcha-verify-button").click()
         time.sleep(2)
         driver.switch_to.default_content()
@@ -185,6 +305,14 @@ def recaptcha_baseline_attempt(demo_url: str = RECAPTCHA_DEMO_URL, headless: boo
             driver.find_element(By.ID, "recaptcha-anchor").get_attribute("aria-checked") == "true"
         )
         driver.switch_to.default_content()
+
+        save_attempt_capture(
+            target="recaptcha",
+            technique="baseline_no_select",
+            screenshot_png=grid_screenshot,
+            outcome="success" if succeeded else "failure",
+            extra={"instruction": instruction, "grid_size": grid_size},
+        )
 
         return {
             "outcome": "success" if succeeded else "failure",
@@ -370,7 +498,7 @@ def recaptcha_llm_vision_attempt(
         for round_number in range(1, max_rounds + 1):
             rounds_used = round_number
             grid_screenshot = driver.find_element(By.CSS_SELECTOR, "table").screenshot_as_png
-            answer = solve_recaptcha_grid_by_majority_vote(
+            answer = solve_recaptcha_grid_adaptive_vote(
                 screenshot_png=grid_screenshot,
                 instruction=instruction,
                 grid_rows=grid_size,
@@ -408,6 +536,271 @@ def recaptcha_llm_vision_attempt(
                 "tile_indices": sorted(selected),
                 "reasoning": last_reasoning,
                 "rounds_used": rounds_used,
+            },
+        }
+    finally:
+        driver.quit()
+
+
+def _wait_for_tiles_loaded(driver, timeout: float = 5.0) -> None:
+    """Espera as imagens de cada célula do grid terminarem de carregar.
+
+    Achado ao vivo em 2026-11-08: no desafio dinâmico ("...clique em
+    'Confirmar'/'Pular' quando não houver mais nenhuma"), o Google troca a
+    imagem de uma célula recém-confirmada por uma nova antes de aceitar a
+    resposta -- um screenshot tirado durante essa troca mostra a célula em
+    branco, e a CNN (corretamente, dado o que recebeu) classifica "sem
+    correspondência" numa imagem que na real ainda não carregou, não numa
+    célula genuinamente negativa.
+
+    **Primeira versão checava `querySelectorAll('td... img')` e ainda via
+    célula em branco** (confirmado ao vivo logo depois de implementar): o
+    Google aparentemente REMOVE o `<img>` antigo e só insere um novo depois,
+    então por um instante a célula não tem NENHUM `<img>` -- um seletor que
+    busca `img` direto simplesmente ignora essa célula (lista vazia nela),
+    em vez de esperar por ela aparecer. Corrigido iterando por `<td>` e
+    exigindo que CADA UM tenha um `<img>` carregado, não o inverso.
+
+    Checa `img.complete`/`naturalWidth` via JS em vez de inferir "em
+    branco" a partir do screenshot (mais direto, sem risco de confundir com
+    uma célula real que por acaso é clara/uniforme). Estoura o timeout em
+    silêncio -- se alguma imagem nunca carrega (ex. erro de rede), segue com
+    o que tiver em vez de travar a tentativa; mesmo risco de antes desta
+    função existir, nunca pior.
+    """
+    script = (
+        "return Array.from(document.querySelectorAll('td.rc-imageselect-tile')).every(td => {"
+        "  const img = td.querySelector('img');"
+        "  return img && img.complete && img.naturalWidth > 0;"
+        "});"
+    )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if driver.execute_script(script):
+            return
+        time.sleep(0.2)
+
+
+def recaptcha_grid_cnn_attempt(
+    demo_url: str = RECAPTCHA_DEMO_URL,
+    headless: bool = True,
+    max_rounds: int = 5,
+    max_challenges: int = 3,
+) -> dict:
+    """Resolve o grid do reCAPTCHA via CNN treinado (sem LLM, sem custo de API por tentativa).
+
+    A pedido do usuário: parar de reportar o solver via LLM
+    (`recaptcha_llm_vision_attempt`) como a técnica atual do projeto pro
+    reCAPTCHA -- ele continua no repositório (histórico/comparação), mas
+    deixa de ser a técnica usada aqui. Mesmo fluxo e mesmo loop de
+    refinamento por rodadas de `recaptcha_llm_vision_attempt`, trocando só
+    o solver: `attacks.image_grid_cnn.solver.solve_recaptcha_grid_cnn`, que
+    classifica cada célula com uma CNN pequena treinada sobre células
+    reais rotuladas (ver `attacks/image_grid_cnn/build_dataset.py`).
+
+    **Escopo explícito, por desenho**: o classificador só cobre as
+    categorias com checkpoint treinado em `data/models/` -- "carros"
+    (`build_dataset.py`) e, desde Nov/2026, "onibus"/"semaforos"/
+    "motocicletas"/"bicicletas" (`image_grid_cnn/category_models.py`). Pra
+    qualquer outra categoria (pontes, faixas de pedestre, escadas,
+    montanhas -- ainda sem dado suficiente), `resolve_checkpoint` retorna
+    `None` e esta função trata como fora de escopo
+    (`technique_scope: "not_applicable"`), em vez de arriscar uma
+    classificação sem dado de treino -- mesmo princípio já usado em
+    `hcaptcha_classical_cv_attempt` pros tipos sem solver.
+
+    **Encadeamento de desafios, achado ao vivo em 2026-11-05**: o Google não
+    só aceita/nega depois de um clique em "Verificar" -- ao rejeitar, com
+    frequência troca o conteúdo do MESMO bframe por um desafio novo (mesma
+    categoria com imagens diferentes, ou categoria diferente) em vez de só
+    marcar `aria-checked="false"`. A versão anterior desta função conferia
+    `aria-checked` uma única vez após o primeiro clique e desistia -- uma
+    tentativa foi negada porque esse desafio seguinte apareceu e nunca foi
+    resolvido. Por isso o laço externo (`max_challenges`) volta a checar se
+    o bframe segue visível com um desafio novo antes de desistir, resolvendo
+    cada um (ou tratando como fora de escopo) até o limite.
+
+    **Reexibição do MESMO desafio, achado ao vivo em 2026-11-07**: nem todo
+    reaparecimento do iframe após "Verificar" é um desafio novo -- às vezes
+    o Google reexibe as MESMAS imagens (confirmado comparando bytes do
+    screenshot entre tentativas: idêntico em 3/3 casos investigados), sem
+    limpar o selo visual de "marcado" das células já clicadas. Resetar
+    `selected` nesse caso (como a versão anterior fazia sempre) arrisca dois
+    problemas: (1) reclicar uma célula já certa -- o clique no reCAPTCHA
+    ALTERNA a marcação, então isso a desmarca sem o código perceber; (2)
+    reclassificar uma imagem já contaminada com o selo queimado nos pixels,
+    algo que o modelo nunca viu no treino. Por isso o início de cada
+    desafio compara o screenshot inicial com o do desafio anterior
+    (`previous_challenge_screenshot`) -- só zera `selected` se o conteúdo
+    realmente mudou.
+
+    **Imagem de célula ainda carregando, achado ao vivo em 2026-11-08**: no
+    desafio dinâmico ("...clique em 'Confirmar'/'Pular' quando não houver
+    mais nenhuma"), confirmar uma célula faz o Google trocar sua imagem por
+    uma nova antes de aceitar a resposta -- confirmado visualmente (célula
+    em branco logo após o clique, ainda em branco alguns segundos depois).
+    Classificar nesse instante dá "sem correspondência" numa imagem que não
+    carregou, não numa célula genuinamente negativa. `_wait_for_tiles_loaded`
+    espera `img.complete`/`naturalWidth` via JS antes de cada screenshot
+    usado pra classificar ou salvar diagnóstico.
+    """
+    driver = build_driver(BrowserConfig(headless=headless))
+    try:
+        wait = WebDriverWait(driver, 15)
+        driver.get(demo_url)
+
+        anchor_iframe = wait.until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, RECAPTCHA_ANCHOR_IFRAME_SELECTOR))
+        )
+        driver.switch_to.frame(anchor_iframe)
+        checkbox = wait.until(EC.element_to_be_clickable((By.ID, "recaptcha-anchor")))
+        checkbox.click()
+        driver.switch_to.default_content()
+
+        try:
+            challenge_iframe = WebDriverWait(driver, 6).until(
+                EC.visibility_of_element_located(
+                    (By.CSS_SELECTOR, RECAPTCHA_CHALLENGE_IFRAME_SELECTOR)
+                )
+            )
+        except TimeoutException:
+            driver.switch_to.frame(anchor_iframe)
+            passed = (
+                driver.find_element(By.ID, "recaptcha-anchor").get_attribute("aria-checked")
+                == "true"
+            )
+            driver.switch_to.default_content()
+            return {"outcome": "success" if passed else "challenge_not_presented"}
+
+        succeeded = False
+        rounds_used_total = 0
+        all_tile_indices: set[int] = set()
+        last_instruction, last_grid_size, last_scope = "", 0, None
+        selected: set[int] = set()
+        previous_challenge_screenshot: bytes | None = None
+
+        for challenge_number in range(1, max_challenges + 1):
+            driver.switch_to.frame(challenge_iframe)
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table")))
+
+            instruction = driver.find_element(
+                By.CSS_SELECTOR, ".rc-imageselect-desc-wrapper, .rc-imageselect-instructions"
+            ).text
+            tiles = driver.find_elements(By.CSS_SELECTOR, "td.rc-imageselect-tile")
+            grid_size = round(len(tiles) ** 0.5)
+            last_instruction, last_grid_size = instruction, grid_size
+
+            if resolve_checkpoint(instruction) is None:
+                last_scope = "not_applicable"
+                previous_challenge_screenshot = None
+                driver.find_element(By.ID, "recaptcha-verify-button").click()
+                time.sleep(2)
+            else:
+                last_scope = None
+                _wait_for_tiles_loaded(driver)
+                initial_screenshot = driver.find_element(By.CSS_SELECTOR, "table").screenshot_as_png
+
+                # Achado ao vivo em 2026-11-07: o Google às vezes REEXIBE o
+                # mesmo desafio (fotos idênticas) depois de uma resposta
+                # rejeitada, em vez de trocar de categoria/imagens -- o selo
+                # de "marcado" das células já clicadas continua visível no
+                # DOM, mas antes desta correção o código tratava qualquer
+                # reaparecimento do iframe como desafio NOVO e zerava
+                # `selected`, arriscando reclicar (e assim DESMARCAR, já que
+                # o clique no reCAPTCHA alterna) uma célula já certa, além de
+                # reclassificar uma imagem já contaminada com o selo visual
+                # queimado nos pixels. Comparando os bytes do screenshot com
+                # o do desafio anterior, dá pra saber se é mesmo um desafio
+                # novo ou só uma reexibição do mesmo.
+                is_same_challenge = (
+                    previous_challenge_screenshot is not None
+                    and initial_screenshot == previous_challenge_screenshot
+                )
+                if not is_same_challenge:
+                    selected = set()
+
+                for round_number in range(1, max_rounds + 1):
+                    rounds_used_total += 1
+                    if round_number == 1:
+                        grid_screenshot = initial_screenshot
+                    else:
+                        _wait_for_tiles_loaded(driver)
+                        grid_screenshot = driver.find_element(
+                            By.CSS_SELECTOR, "table"
+                        ).screenshot_as_png
+                    matches = solve_recaptcha_grid_cnn(
+                        screenshot_png=grid_screenshot,
+                        instruction=instruction,
+                        grid_rows=grid_size,
+                        grid_cols=grid_size,
+                    )
+                    new_indices = [idx for idx in (matches or []) if idx not in selected]
+                    if not new_indices:
+                        break
+
+                    for tile_index in new_indices:
+                        driver.find_element(
+                            By.CSS_SELECTOR, f"td.rc-imageselect-tile[id='{tile_index}']"
+                        ).click()
+                        selected.add(tile_index)
+                    time.sleep(1.0)
+                all_tile_indices |= selected
+                previous_challenge_screenshot = initial_screenshot
+
+                # Captura pós-clique, pré-submissão, só pra diagnóstico visual
+                # (achado ao vivo de 2026-11-05: usuário observou "não está
+                # clicando no grid" -- esta captura permite conferir depois se
+                # os tiles previstos aparecem de fato marcados antes de
+                # submeter).
+                _wait_for_tiles_loaded(driver)
+                post_click_screenshot = driver.find_element(
+                    By.CSS_SELECTOR, "table"
+                ).screenshot_as_png
+                save_attempt_capture(
+                    target="recaptcha",
+                    technique="grid_cnn",
+                    screenshot_png=post_click_screenshot,
+                    outcome="pending",
+                    extra={
+                        "instruction": instruction,
+                        "grid_size": grid_size,
+                        "tile_indices": sorted(selected),
+                        "challenge_number": challenge_number,
+                    },
+                )
+
+                driver.find_element(By.ID, "recaptcha-verify-button").click()
+                time.sleep(2)
+
+            driver.switch_to.default_content()
+            driver.switch_to.frame(anchor_iframe)
+            succeeded = (
+                driver.find_element(By.ID, "recaptcha-anchor").get_attribute("aria-checked")
+                == "true"
+            )
+            driver.switch_to.default_content()
+
+            if succeeded:
+                break
+
+            try:
+                challenge_iframe = WebDriverWait(driver, 4).until(
+                    EC.visibility_of_element_located(
+                        (By.CSS_SELECTOR, RECAPTCHA_CHALLENGE_IFRAME_SELECTOR)
+                    )
+                )
+            except TimeoutException:
+                break  # sem desafio novo -- falha definitiva, não só mais uma rodada
+
+        return {
+            "outcome": "success" if succeeded else "failure",
+            "sub_challenges": rounds_used_total,
+            "extra": {
+                "instruction": last_instruction,
+                "grid_size": last_grid_size,
+                "tile_indices": sorted(all_tile_indices),
+                "rounds_used": rounds_used_total,
+                **({"technique_scope": last_scope} if last_scope else {}),
             },
         }
     finally:
@@ -789,7 +1182,7 @@ def hcaptcha_llm_vision_attempt(
                 grid_screenshot = driver.find_element(
                     By.CSS_SELECTOR, ".task-grid"
                 ).screenshot_as_png
-                answer = solve_recaptcha_grid_by_majority_vote(
+                answer = solve_recaptcha_grid_adaptive_vote(
                     screenshot_png=grid_screenshot,
                     instruction=prompt,
                     grid_rows=grid_size,
@@ -800,10 +1193,8 @@ def hcaptcha_llm_vision_attempt(
                 new_indices = [idx for idx in answer.tile_indices if idx not in selected]
                 if not new_indices:
                     break
-                current_tasks = driver.find_elements(By.CSS_SELECTOR, ".task")
-                for tile_index in new_indices:
-                    current_tasks[tile_index].click()
-                    selected.add(tile_index)
+                click_grid_tiles(driver, new_indices)
+                selected.update(new_indices)
                 time.sleep(1.0)
             extra.update(
                 {
@@ -814,6 +1205,9 @@ def hcaptcha_llm_vision_attempt(
                     "rounds_used": rounds_used,
                 }
             )
+            outcome_state = _submit_round_and_check(driver, checkbox_iframe)
+            succeeded = outcome_state == "success"
+            native_screenshot = None
         else:
             canvas = driver.find_element(By.CSS_SELECTOR, "canvas")
             canvas_wh = (canvas.size["width"], canvas.size["height"])
@@ -847,47 +1241,85 @@ def hcaptcha_llm_vision_attempt(
                         "confidence": drag_answer.confidence,
                     }
                 )
+                outcome_state = _submit_round_and_check(driver, checkbox_iframe)
+                succeeded = outcome_state == "success"
+                native_screenshot = None
             else:
-                native_screenshot, native_scale = _canvas_native_screenshot(driver, canvas)
                 criterion_type = _infer_canvas_criterion_type(prompt)
-                click_answer = solve_canvas_points_by_consensus(
-                    screenshot_png=native_screenshot,
-                    instruction=prompt,
-                    criterion_type=criterion_type,
-                    model=canvas_model,
-                    n_votes=n_votes,
-                )
-                # `click_answer` vem em coordenada do bitmap NATIVO do canvas
-                # (resolução interna, ex. 2x a CSS); harness.humanized_actions
-                # trabalha em coordenada CSS (a mesma de canvas_wh/canvas.size)
-                # — converter antes de clicar, senão o clique sai fora do alvo.
-                css_points = [
-                    (point.x / native_scale, point.y / native_scale)
-                    for point in click_answer.points
-                ]
-                for css_point in css_points:
-                    click_canvas_point(driver, canvas, css_point, canvas_wh)
-                    time.sleep(0.3)
+                rounds_used = 0
+                outcome_state = "retry"
+                css_points: list[tuple[float, float]] = []
+                native_screenshot = None
+                elements_considered = None
+                reasoning = None
+
+                # Loop de retentativa (achado ao vivo em 2026-11-04, ver
+                # `_submit_round_and_check`): hCaptcha reapresenta o mesmo
+                # tipo de desafio com conteúdo regenerado em vez de rejeitar
+                # na hora. **Custo**: cada rodada extra é uma chamada paga de
+                # API a mais (`solve_canvas_points_by_consensus`, já com
+                # `n_votes` chamadas internas) -- até
+                # `HCAPTCHA_CANVAS_MAX_ROUNDS`x o custo de antes por tentativa.
+                #
+                # Achado ao vivo em 2026-11-04 (investigação de um sub-agente,
+                # `digit_membership` nunca tentado): "reapresenta o mesmo tipo"
+                # acima está incorreto -- inspecionando as imagens reais salvas,
+                # o regenerar-ao-submeter-errado troca o TIPO de desafio
+                # inteiro, não só o conteúdo. `prompt`/`criterion_type` lidos só
+                # uma vez antes do loop ficavam obsoletos a partir da 2ª rodada,
+                # aplicando o critério errado a um desafio diferente -- por isso
+                # relê o prompt e reinfere o tipo a cada rodada.
+                while outcome_state == "retry" and rounds_used < HCAPTCHA_CANVAS_MAX_ROUNDS:
+                    rounds_used += 1
+                    prompt = driver.find_element(By.CSS_SELECTOR, ".prompt-text").text
+                    criterion_type = _infer_canvas_criterion_type(prompt)
+                    canvas = driver.find_element(By.CSS_SELECTOR, "canvas")
+                    canvas_wh = (canvas.size["width"], canvas.size["height"])
+                    native_screenshot, native_scale = _canvas_native_screenshot(driver, canvas)
+                    click_answer = solve_canvas_points_by_consensus(
+                        screenshot_png=native_screenshot,
+                        instruction=prompt,
+                        criterion_type=criterion_type,
+                        model=canvas_model,
+                        n_votes=n_votes,
+                    )
+                    # `click_answer` vem em coordenada do bitmap NATIVO do canvas
+                    # (resolução interna, ex. 2x a CSS); harness.humanized_actions
+                    # trabalha em coordenada CSS (a mesma de canvas_wh/canvas.size)
+                    # — converter antes de clicar, senão o clique sai fora do alvo.
+                    css_points = [
+                        (point.x / native_scale, point.y / native_scale)
+                        for point in click_answer.points
+                    ]
+                    for css_point in css_points:
+                        click_canvas_point(driver, canvas, css_point, canvas_wh)
+                        time.sleep(0.3)
+                    elements_considered = click_answer.elements_considered
+                    reasoning = click_answer.reasoning
+
+                    outcome_state = _submit_round_and_check(driver, checkbox_iframe)
+
+                succeeded = outcome_state == "success"
                 extra.update(
                     {
                         "challenge_type": "canvas_points",
+                        "prompt": prompt,
                         "criterion_type": criterion_type,
                         "points": css_points,
-                        "elements_considered": click_answer.elements_considered,
-                        "reasoning": click_answer.reasoning,
+                        "elements_considered": elements_considered,
+                        "reasoning": reasoning,
+                        "rounds_used": rounds_used,
                     }
                 )
 
-        driver.find_element(By.CSS_SELECTOR, ".button-submit").click()
-        time.sleep(2)
-        driver.switch_to.default_content()
-
-        driver.switch_to.frame(checkbox_iframe)
-        succeeded = (
-            driver.find_element(By.CSS_SELECTOR, "#checkbox").get_attribute("aria-checked")
-            == "true"
-        )
-        driver.switch_to.default_content()
+        if extra.get("challenge_type") == "canvas_points" and native_screenshot is not None:
+            save_attempt_capture(
+                target="hcaptcha",
+                technique="llm_vision",
+                screenshot_png=native_screenshot,
+                outcome="success" if succeeded else "failure",
+                extra=extra,
+            )
 
         return {
             "outcome": "success" if succeeded else "failure",
@@ -901,8 +1333,20 @@ def hcaptcha_llm_vision_attempt(
 def hcaptcha_classical_cv_attempt(
     demo_url: str = HCAPTCHA_DEMO_URL,
     headless: bool = True,
+    closed_loop_solver=solve_closed_loop_classical,
 ) -> dict:
     """Resolve o clique-sobre-canvas do hCaptcha via visão computacional clássica/OCR — sem LLM.
+
+    `closed_loop_solver`: função usada só pro subtipo "laços fechados"
+    (mesma assinatura de `solve_closed_loop_classical` — recebe a imagem,
+    devolve lista de pontos). Parametrizável pra trocar pelo classificador
+    CNN treinado (`attacks.canvas_click_cnn.solver.solve_closed_loop_cnn`,
+    técnica `classical_cv_cnn` no `run_live_cli.py`) sem duplicar toda a
+    orquestração do Selenium desta função — "ícone diferente" e "número do
+    grupo" continuam sempre na heurística clássica, já que o CNN desta
+    sessão só foi treinado pra "laços fechados" (ver
+    `attacks/canvas_click_cnn/build_dataset.py` sobre por que os outros
+    dois tipos não tiveram dado rotulável suficiente).
 
     Pedido explícito do usuário depois do `gpt-6-astra` também não resolver
     nenhum dos três tipos de desafio canvas (0/51 no total — ver docstring de
@@ -981,52 +1425,338 @@ def hcaptcha_classical_cv_attempt(
         tasks = driver.find_elements(By.CSS_SELECTOR, ".task")
         extra: dict = {"prompt": prompt}
 
+        native_screenshot = None
+        rounds_used = 1
+
         if tasks or "arrast" in prompt.lower():
             extra["challenge_type"] = "grid" if tasks else "drag_puzzle"
             extra["technique_scope"] = "not_applicable"
+            outcome_state = _submit_round_and_check(driver, checkbox_iframe)
+            succeeded = outcome_state == "success"
         else:
-            canvas = driver.find_element(By.CSS_SELECTOR, "canvas")
-            canvas_wh = (canvas.size["width"], canvas.size["height"])
-            native_screenshot, native_scale = _canvas_native_screenshot(driver, canvas)
-            image = cv2.imdecode(np.frombuffer(native_screenshot, dtype=np.uint8), cv2.IMREAD_COLOR)
             criterion_type = _infer_canvas_criterion_type(prompt)
+            rounds_used = 0
+            outcome_state = "retry"
+            css_points: list[tuple[float, float]] = []
 
-            if criterion_type == "closed_loop":
-                native_points = solve_closed_loop_classical(image)
-            elif criterion_type == "digit_membership":
-                point = solve_digit_membership_classical(image, prompt)
-                native_points = [point] if point else []
-            else:
-                point = solve_icon_outlier_classical(image)
-                native_points = [point] if point else []
+            # Loop de retentativa (achado ao vivo em 2026-11-04, ver
+            # `_submit_round_and_check`): hCaptcha reapresenta o mesmo tipo
+            # de desafio com conteúdo regenerado em vez de rejeitar na hora
+            # -- sem isto, a tentativa desistia depois de uma única rodada.
+            #
+            # Achado ao vivo em 2026-11-04 (investigação de um sub-agente,
+            # `digit_membership` nunca tentado): "reapresenta o mesmo tipo"
+            # acima está incorreto -- o regenerar-ao-submeter-errado troca o
+            # TIPO de desafio inteiro, não só o conteúdo. `prompt`/
+            # `criterion_type` lidos só uma vez antes do loop ficavam
+            # obsoletos a partir da 2ª rodada, aplicando o critério errado a
+            # um desafio diferente -- por isso relê o prompt e reinfere o
+            # tipo a cada rodada.
+            while outcome_state == "retry" and rounds_used < HCAPTCHA_CANVAS_MAX_ROUNDS:
+                rounds_used += 1
+                prompt = driver.find_element(By.CSS_SELECTOR, ".prompt-text").text
+                criterion_type = _infer_canvas_criterion_type(prompt)
+                canvas = driver.find_element(By.CSS_SELECTOR, "canvas")
+                canvas_wh = (canvas.size["width"], canvas.size["height"])
 
-            css_points = [(x / native_scale, y / native_scale) for x, y in native_points]
-            for css_point in css_points:
-                click_canvas_point(driver, canvas, css_point, canvas_wh)
-                time.sleep(0.3)
+                if criterion_type == "digit_membership":
+                    # Achado ao vivo em 2026-11-04 (ver
+                    # `attacks.classical_canvas_solver.solve_digit_membership_temporal`):
+                    # o dígito oculto por listras deriva de posição/escala ao
+                    # longo do tempo, igual o "ícone diferente" -- rajada de
+                    # frames em vez de uma única captura.
+                    frames, native_scale = _capture_canvas_burst(driver, canvas)
+                    # Achado ao vivo em 2026-11-04: `frames[-1]` é um array
+                    # numpy já decodificado (ver `_capture_canvas_burst`), não
+                    # os bytes PNG que `save_attempt_capture` espera -- sem
+                    # reencodar, o arquivo salvo em disco vira um dump de
+                    # pixels corrompido em vez de um PNG de verdade.
+                    native_screenshot = cv2.imencode(".png", frames[-1])[1].tobytes()
+                    point = solve_digit_membership_temporal(frames, prompt)
+                    native_points = [point] if point else []
+                else:
+                    native_screenshot, native_scale = _canvas_native_screenshot(driver, canvas)
+                    image = cv2.imdecode(
+                        np.frombuffer(native_screenshot, dtype=np.uint8), cv2.IMREAD_COLOR
+                    )
 
+                    if criterion_type == "closed_loop":
+                        native_points = closed_loop_solver(image)
+                    elif criterion_type == "icon_outlier":
+                        point = solve_icon_outlier_classical(image)
+                        native_points = [point] if point else []
+                    elif criterion_type == "identical_elements":
+                        native_points = solve_identical_elements_classical(image)
+                    else:
+                        # Tipo de desafio canvas ainda não catalogado (ver
+                        # achado de 2026-11-04 em `_infer_canvas_criterion_type`)
+                        # -- não força mais em "icon_outlier" por padrão, e
+                        # sem solver não adianta tentar de novo numa rodada
+                        # regenerada.
+                        native_points = []
+
+                css_points = [(x / native_scale, y / native_scale) for x, y in native_points]
+                for css_point in css_points:
+                    click_canvas_point(driver, canvas, css_point, canvas_wh)
+                    time.sleep(0.3)
+
+                outcome_state = _submit_round_and_check(driver, checkbox_iframe)
+                if criterion_type is None:
+                    break
+
+            succeeded = outcome_state == "success"
             extra.update(
                 {
                     "challenge_type": "canvas_points",
+                    "prompt": prompt,
                     "criterion_type": criterion_type,
                     "points": css_points,
+                    "rounds_used": rounds_used,
                 }
             )
+            if criterion_type is None:
+                extra["technique_scope"] = "not_applicable"
 
-        driver.find_element(By.CSS_SELECTOR, ".button-submit").click()
-        time.sleep(2)
-        driver.switch_to.default_content()
-
-        driver.switch_to.frame(checkbox_iframe)
-        succeeded = (
-            driver.find_element(By.CSS_SELECTOR, "#checkbox").get_attribute("aria-checked")
-            == "true"
-        )
-        driver.switch_to.default_content()
+        if extra.get("challenge_type") == "canvas_points" and native_screenshot is not None:
+            save_attempt_capture(
+                target="hcaptcha",
+                technique="classical_cv",
+                screenshot_png=native_screenshot,
+                outcome="success" if succeeded else "failure",
+                extra=extra,
+            )
 
         return {
             "outcome": "success" if succeeded else "failure",
-            "sub_challenges": 1,
+            "sub_challenges": rounds_used,
+            "extra": extra,
+        }
+    finally:
+        driver.quit()
+
+
+def hcaptcha_combined_attempt(
+    demo_url: str = HCAPTCHA_DEMO_URL,
+    headless: bool = True,
+    max_rounds: int = 3,
+    n_votes: int = 3,
+) -> dict:
+    """Roteia cada tipo de desafio do hCaptcha pra melhor técnica já medida.
+
+    **Histórico da troca de técnica da grade (2026-11-05)**: por um
+    período curto, esta função chamou `solve_recaptcha_grid_cnn` (CNN
+    treinado, sem custo de API) em vez do solver via LLM, a pedido do
+    usuário ("tira o v2 da OpenAI e os solvers do hCaptcha também"). O
+    usuário observou ao vivo que o clique não acontecia de forma
+    confiável (causa não diagnosticada a tempo) e pediu a reversão
+    ("coloca o v2 na openAI") -- a grade voltou a usar
+    `solve_recaptcha_grid_adaptive_vote` (LLM), igual antes. O código do
+    CNN continua em `attacks/image_grid_cnn/` (usado por
+    `recaptcha_grid_cnn_attempt` isoladamente), só não é mais chamado
+    aqui.
+
+    Técnica usada por tipo de desafio:
+
+    - **Grade de imagens**: `solve_recaptcha_grid_adaptive_vote` (LLM) --
+      mesma técnica usada em `recaptcha_llm_vision_attempt`.
+    - **Arrastar-e-encaixar**: sem substituto sem LLM ainda (a pedido do
+      usuário, não chama mais `solve_puzzle_piece`) -- vira
+      `technique_scope: "not_applicable"`.
+    - **Laços fechados**: `solve_closed_loop_cnn` (CNN treinado, ver
+      `attacks/canvas_click_cnn/`) -- sem LLM.
+    - **Ícone diferente**: `solve_icon_outlier_temporal` (análise
+      temporal, ver `attacks/temporal_canvas_solver.py`) -- sem LLM.
+    - **Número do grupo**: `solve_digit_membership_classical`/
+      `solve_digit_membership_temporal` (OCR) -- sem LLM.
+    """
+    driver = build_driver(BrowserConfig(headless=headless))
+    try:
+        wait = WebDriverWait(driver, 15)
+        driver.get(demo_url)
+
+        checkbox_iframe = wait.until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, HCAPTCHA_CHECKBOX_IFRAME_SELECTOR))
+        )
+        driver.switch_to.frame(checkbox_iframe)
+        checkbox = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#checkbox")))
+        checkbox.click()
+        driver.switch_to.default_content()
+
+        try:
+            challenge_iframe = WebDriverWait(driver, 6).until(
+                EC.visibility_of_element_located(
+                    (By.CSS_SELECTOR, HCAPTCHA_CHALLENGE_IFRAME_SELECTOR)
+                )
+            )
+        except TimeoutException:
+            driver.switch_to.frame(checkbox_iframe)
+            passed = (
+                driver.find_element(By.CSS_SELECTOR, "#checkbox").get_attribute("aria-checked")
+                == "true"
+            )
+            driver.switch_to.default_content()
+            return {"outcome": "success" if passed else "challenge_not_presented"}
+
+        driver.switch_to.frame(challenge_iframe)
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".challenge-container")))
+        prompt = driver.find_element(By.CSS_SELECTOR, ".prompt-text").text
+
+        tasks = driver.find_elements(By.CSS_SELECTOR, ".task")
+        extra: dict = {"prompt": prompt}
+        rounds_used = 1
+        native_screenshot = None
+
+        if tasks:
+            # Revertido de volta pra solve_recaptcha_grid_adaptive_vote
+            # (LLM) a pedido do usuário em 2026-11-05 -- a tentativa de
+            # trocar pelo CNN (solve_recaptcha_grid_cnn) não teve clique
+            # confiável ao vivo (usuário observou "não está clicando no
+            # grid", causa ainda não diagnosticada). O código do CNN
+            # continua em attacks/image_grid_cnn/, só não é mais chamado
+            # aqui.
+            grid_size = round(len(tasks) ** 0.5)
+            selected: set[int] = set()
+            last_reasoning = ""
+            for round_number in range(1, max_rounds + 1):
+                rounds_used = round_number
+                grid_screenshot = driver.find_element(
+                    By.CSS_SELECTOR, ".task-grid"
+                ).screenshot_as_png
+                answer = solve_recaptcha_grid_adaptive_vote(
+                    screenshot_png=grid_screenshot,
+                    instruction=prompt,
+                    grid_rows=grid_size,
+                    grid_cols=grid_size,
+                    n_votes=n_votes,
+                )
+                last_reasoning = answer.reasoning
+                new_indices = [idx for idx in answer.tile_indices if idx not in selected]
+                if not new_indices:
+                    break
+                click_grid_tiles(driver, new_indices)
+                selected.update(new_indices)
+                time.sleep(1.0)
+            extra.update(
+                {
+                    "challenge_type": "grid",
+                    "grid_size": grid_size,
+                    "tile_indices": sorted(selected),
+                    "reasoning": last_reasoning,
+                    "rounds_used": rounds_used,
+                }
+            )
+            outcome_state = _submit_round_and_check(driver, checkbox_iframe)
+            succeeded = outcome_state == "success"
+        else:
+            canvas = driver.find_element(By.CSS_SELECTOR, "canvas")
+            canvas_wh = (canvas.size["width"], canvas.size["height"])
+
+            if "arrast" in prompt.lower():
+                # Sem substituto sem LLM pra arrastar-e-encaixar ainda (ver
+                # README) -- a pedido do usuário, não chama mais
+                # solve_puzzle_piece aqui; fica fora de escopo, mesmo
+                # tratamento já usado pros tipos sem solver nesta função.
+                extra.update({"challenge_type": "drag_puzzle", "technique_scope": "not_applicable"})
+                outcome_state = _submit_round_and_check(driver, checkbox_iframe)
+                succeeded = outcome_state == "success"
+            else:
+                criterion_type = _infer_canvas_criterion_type(prompt)
+                rounds_used = 0
+                outcome_state = "retry"
+                css_points: list[tuple[float, float]] = []
+
+                # Loop de retentativa (achado ao vivo em 2026-11-04, ver
+                # `_submit_round_and_check`): hCaptcha reapresenta o mesmo
+                # tipo de desafio com conteúdo regenerado em vez de rejeitar
+                # na hora -- sem isto, a tentativa desistia numa única rodada.
+                #
+                # Achado ao vivo em 2026-11-04 (investigação de um sub-agente,
+                # "elementos idênticos" nunca clicado e "laços fechados"
+                # marcando errado): "reapresenta o mesmo tipo" acima está
+                # incorreto -- o regenerar-ao-submeter-errado troca o TIPO de
+                # desafio inteiro, não só o conteúdo (confirmado inspecionando
+                # as imagens reais salvas: uma tentativa rotulada
+                # "digit_membership" na 2ª/3ª rodada mostrava, de fato, um
+                # desafio de "laços fechados" ou "elementos idênticos" na
+                # tela). `prompt`/`criterion_type` lidos só uma vez antes do
+                # loop ficavam obsoletos a partir da 2ª rodada, aplicando o
+                # critério errado a um desafio diferente -- por isso relê o
+                # prompt e reinfere o tipo a cada rodada.
+                while outcome_state == "retry" and rounds_used < HCAPTCHA_CANVAS_MAX_ROUNDS:
+                    rounds_used += 1
+                    prompt = driver.find_element(By.CSS_SELECTOR, ".prompt-text").text
+                    criterion_type = _infer_canvas_criterion_type(prompt)
+                    canvas = driver.find_element(By.CSS_SELECTOR, "canvas")
+                    canvas_wh = (canvas.size["width"], canvas.size["height"])
+
+                    if criterion_type == "icon_outlier":
+                        # "Ícone diferente" é animado (ver docstring de
+                        # `attacks.temporal_canvas_solver`): uma única
+                        # captura pode nem ter os dois ícones certos visíveis
+                        # ao mesmo tempo -- rajada de frames em vez de um só.
+                        frames, native_scale = _capture_canvas_burst(driver, canvas)
+                        native_screenshot = cv2.imencode(".png", frames[-1])[1].tobytes()
+                        point = solve_icon_outlier_temporal(frames)
+                        native_points = [point] if point else []
+                    elif criterion_type == "digit_membership":
+                        # Mesmo achado, 2026-11-04 (ver
+                        # `attacks.classical_canvas_solver.solve_digit_membership_temporal`):
+                        # o dígito oculto por listras também deriva de
+                        # posição/escala ao longo do tempo.
+                        frames, native_scale = _capture_canvas_burst(driver, canvas)
+                        native_screenshot = cv2.imencode(".png", frames[-1])[1].tobytes()
+                        point = solve_digit_membership_temporal(frames, prompt)
+                        native_points = [point] if point else []
+                    else:
+                        native_screenshot, native_scale = _canvas_native_screenshot(driver, canvas)
+                        image = cv2.imdecode(
+                            np.frombuffer(native_screenshot, dtype=np.uint8), cv2.IMREAD_COLOR
+                        )
+                        if criterion_type == "closed_loop":
+                            native_points = solve_closed_loop_cnn(image)
+                        elif criterion_type == "identical_elements":
+                            native_points = solve_identical_elements_classical(image)
+                        else:
+                            # Tipo de desafio canvas ainda não catalogado (ver
+                            # achado de 2026-11-04 em
+                            # `_infer_canvas_criterion_type`) -- sem solver,
+                            # não adianta tentar de novo numa rodada regenerada.
+                            native_points = []
+
+                    css_points = [(x / native_scale, y / native_scale) for x, y in native_points]
+                    for css_point in css_points:
+                        click_canvas_point(driver, canvas, css_point, canvas_wh)
+                        time.sleep(0.3)
+
+                    outcome_state = _submit_round_and_check(driver, checkbox_iframe)
+                    if criterion_type is None:
+                        break
+
+                succeeded = outcome_state == "success"
+                extra.update(
+                    {
+                        "challenge_type": "canvas_points",
+                        "prompt": prompt,
+                        "criterion_type": criterion_type,
+                        "points": css_points,
+                        "rounds_used": rounds_used,
+                    }
+                )
+                if criterion_type is None:
+                    extra["technique_scope"] = "not_applicable"
+
+        if extra.get("challenge_type") == "canvas_points" and native_screenshot is not None:
+            save_attempt_capture(
+                target="hcaptcha",
+                technique="combined",
+                screenshot_png=native_screenshot,
+                outcome="success" if succeeded else "failure",
+                extra=extra,
+            )
+
+        return {
+            "outcome": "success" if succeeded else "failure",
+            "sub_challenges": rounds_used,
             "extra": extra,
         }
     finally:

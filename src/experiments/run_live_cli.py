@@ -7,6 +7,8 @@ Exemplo:
     python -m experiments.run_live_cli --target hcaptcha --technique classical_cv --n 5
     python -m experiments.run_live_cli --target hcaptcha --technique classical_cv --n 500 \
         --pause-every 10 --pause-seconds 30
+    python -m experiments.run_live_cli --target hcaptcha --technique classical_cv_cnn --n 10
+    python -m experiments.run_live_cli --target hcaptcha --technique combined --n 10 --headed
     python -m experiments.run_live_cli --target turnstile --technique behavioral_probe --n 5
     python -m experiments.run_live_cli --target turnstile --technique behavioral_probe --n 1 \
         --sitekey 3x00000000000000000000FF
@@ -18,13 +20,16 @@ import argparse
 import time
 from functools import partial
 
+from attacks.canvas_click_cnn.solver import solve_closed_loop_cnn
 from attacks.llm_vision_solver import MODEL_ID
 from experiments.live import (
     TURNSTILE_SITEKEY_ALWAYS_PASS,
     hcaptcha_baseline_attempt,
     hcaptcha_classical_cv_attempt,
+    hcaptcha_combined_attempt,
     hcaptcha_llm_vision_attempt,
     recaptcha_baseline_attempt,
+    recaptcha_grid_cnn_attempt,
     recaptcha_llm_vision_attempt,
     turnstile_behavioral_attempt,
 )
@@ -35,11 +40,16 @@ ATTEMPT_FNS = {
     "recaptcha": {
         "baseline_no_select": recaptcha_baseline_attempt,
         "llm_vision": recaptcha_llm_vision_attempt,
+        "grid_cnn": recaptcha_grid_cnn_attempt,
     },
     "hcaptcha": {
         "baseline_no_select": hcaptcha_baseline_attempt,
         "llm_vision": hcaptcha_llm_vision_attempt,
         "classical_cv": hcaptcha_classical_cv_attempt,
+        "classical_cv_cnn": partial(
+            hcaptcha_classical_cv_attempt, closed_loop_solver=solve_closed_loop_cnn
+        ),
+        "combined": hcaptcha_combined_attempt,
     },
     "turnstile": {
         "behavioral_probe": turnstile_behavioral_attempt,

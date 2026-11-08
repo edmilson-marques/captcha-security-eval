@@ -55,6 +55,22 @@ def test_server_as_context_manager_starts_and_stops():
     assert raised
 
 
+def test_server_serves_invisible_widget_sitekeys():
+    # As 2 sitekeys de widget invisível (ver achado de 2026-11-04 na
+    # docstring do módulo) usam o mesmo PAGE_TEMPLATE sem nenhuma mudança --
+    # só confirma que o servidor as serve igual às visíveis.
+    for sitekey in ("1x00000000000000000000BB", "2x00000000000000000000BB"):
+        server = TurnstileTestServer(sitekey)
+        url = server.start()
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:
+                body = response.read().decode("utf-8")
+            assert response.status == 200
+            assert f'data-sitekey="{sitekey}"' in body
+        finally:
+            server.stop()
+
+
 def test_each_server_instance_uses_a_different_port():
     with (
         TurnstileTestServer("1x00000000000000000000AA") as url_a,

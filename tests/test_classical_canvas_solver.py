@@ -163,3 +163,42 @@ def test_solve_digit_membership_classical_finds_matching_digit():
     x, _y = result
     # "8" está à esquerda (~x=40-100), "2" à direita (~x=200-260) -> resposta deve ficar à esquerda.
     assert x < 150
+
+
+def test_solve_digit_membership_temporal_returns_none_without_target_digits():
+    frames = [_flat_background() for _ in range(3)]
+    result = solver.solve_digit_membership_temporal(frames, "Clique no ícone que é diferente")
+    assert result is None
+
+
+@requires_tesseract
+def test_solve_digit_membership_temporal_finds_digit_legible_in_only_one_frame():
+    # Achado ao vivo em 2026-11-04: numa rajada real de 10 frames, o dígito-
+    # alvo só ficou legível em 1 deles -- o solver precisa achar essa única
+    # ocorrência mesmo com todos os outros frames ilegíveis/sem nada.
+    illegible = _flat_background()
+    legible = _flat_background(color=(255, 255, 255))
+    cv2.putText(legible, "8", (40, 100), cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 0, 0), thickness=6)
+    cv2.putText(legible, "2", (200, 100), cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 0, 0), thickness=6)
+
+    frames = [illegible, illegible, legible, illegible]
+    result = solver.solve_digit_membership_temporal(
+        frames, "Clique no número que pertence a este grupo: 789"
+    )
+
+    assert result is not None
+
+
+@requires_tesseract
+def test_solve_digit_membership_temporal_none_when_no_frame_has_target_digit():
+    illegible = _flat_background()
+    off_target = _flat_background(color=(255, 255, 255))
+    cv2.putText(off_target, "1", (40, 100), cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 0, 0), thickness=6)
+    cv2.putText(off_target, "2", (200, 100), cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 0, 0), thickness=6)
+
+    frames = [illegible, off_target]
+    result = solver.solve_digit_membership_temporal(
+        frames, "Clique no número que pertence a este grupo: 789"
+    )
+
+    assert result is None

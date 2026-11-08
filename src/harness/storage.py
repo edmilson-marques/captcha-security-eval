@@ -58,3 +58,42 @@ def save_sample(
         json.dumps(asdict(metadata), indent=2, ensure_ascii=False), encoding="utf-8"
     )
     return sample_dir
+
+
+def save_attempt_capture(
+    target: str,
+    technique: str,
+    screenshot_png: bytes,
+    outcome: str,
+    extra: dict | None = None,
+) -> Path:
+    """Persiste o screenshot de uma tentativa real de `experiments/live.py`.
+
+    Complementa `save_sample` (Atividade 1 — coleta manual isolada, com
+    rótulo humano e HTML da página). Aqui o objetivo é outro: acumular, ao
+    longo de lotes reais de experimento, um repertório de imagens de
+    desafio com o resultado verificado pelo próprio widget (sucesso/falha),
+    para no futuro avaliar se um tipo de desafio recicla um conjunto finito
+    de padrões visuais (o que viabilizaria casamento de padrão) — pergunta
+    em aberto até que esse acúmulo exista (ver "Trabalhos futuros" na
+    monografia). Reaproveita o mesmo layout de diretório de `save_sample`
+    (`data/raw/<alvo>/<timestamp>/`), sem gravar `page.html` — não
+    necessário para esse propósito, e evitar esse custo por tentativa
+    importa quando se acumula um lote de centenas.
+    """
+    collected_at = datetime.now(UTC)
+    sample_dir = _sample_dir(target, collected_at)
+
+    (sample_dir / "challenge.png").write_bytes(screenshot_png)
+
+    metadata = {
+        "target": target,
+        "technique": technique,
+        "outcome": outcome,
+        "collected_at": collected_at.isoformat(),
+        "extra": extra or {},
+    }
+    (sample_dir / "metadata.json").write_text(
+        json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return sample_dir

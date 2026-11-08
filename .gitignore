@@ -12,6 +12,18 @@ data/results/**/*
 !data/results/**/.gitkeep
 data/report/
 
+# Recortes de imagem rotulados pra treino (mesmo conteúdo visual de
+# terceiros que data/raw/ — a rotulagem em si fica versionada: dict literal
+# em código (ex. attacks/canvas_click_cnn/build_dataset.py) ou CSV em
+# data/labels/recaptcha_grid_labels/, por isso essa pasta fica de fora do
+# ignore abaixo)
+data/labels/*/
+!data/labels/recaptcha_grid_labels/
+
+# Dataset de terceiros baixado (HF DannyLuna/recaptcha-57k-images-dataset,
+# ver attacks/image_grid_cnn/external_recaptcha57k.py pra re-baixar)
+data/external/
+
 # Checkpoints de modelo
 *.pt
 *.pth
@@ -28,3 +40,6 @@ data/report/
 
 # Notebooks - outputs
 .ipynb_checkpoints/
+
+# Relatórios exportados (gerados a partir do doc em Claude Docs, não fonte)
+/*.pdf

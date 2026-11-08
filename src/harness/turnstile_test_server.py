@@ -33,6 +33,19 @@ comportamentais genuínos do navegador, não a uma sitekey de teste). Medir
 robustez real exigiria uma sitekey Cloudflare própria do aluno em modo
 Managed, como já documentado em `config/targets.yaml` — passo que só o
 aluno pode fazer (precisa de conta/domínio Cloudflare próprios).
+
+**Achado em 2026-11-04**: a página oficial de teste da Cloudflare documenta
+**5** sitekeys de teste, não só as 3 originalmente usadas neste projeto —
+há também um par em modo *widget invisível*
+(`1x00000000000000000000BB` sempre passa, `2x00000000000000000000BB`
+sempre bloqueia), mais relevante pro escopo deste estudo do que as 3
+visíveis, já que o Turnstile real opera majoritariamente invisível. Essa
+página (`PAGE_TEMPLATE`) já funciona com elas sem nenhuma mudança — o
+widget invisível não renderiza UI, mas ainda dispara os mesmos callbacks
+JS. Validado ao vivo (`turnstile_behavioral_attempt`, sem alterar nenhum
+código): `1x...BB` -> `success` (mesmo token `"XXXX.DUMMY.TOKEN.XXXX"`);
+`2x...BB` -> `blocked` (mesmo `error_code` `"600010"` da variante
+visível). Ver `config/targets.yaml` para as 5 sitekeys catalogadas.
 """
 
 from __future__ import annotations
