@@ -68,6 +68,19 @@ class ImageGridDataset(Dataset):
         """Nomes das classes, na ordem dos índices usados pelos rótulos."""
         return self._image_folder.classes
 
+    @property
+    def grid_ids(self) -> list[str]:
+        """Nome da amostra/grid de origem de cada célula, na mesma ordem de `__getitem__`.
+
+        Os arquivos são salvos como `<amostra>__<índice>.png` (ver
+        `build_dataset.build`/`category_models.build`) -- usado pra separar
+        treino/validação por grid de origem em vez de por célula solta, já
+        que várias células do mesmo grid são a mesma foto e vazam contexto
+        entre si (achado ao vivo em 2026-11-05: splitar por célula inflava a
+        acurácia de validação por isso).
+        """
+        return [Path(path).stem.rsplit("__", 1)[0] for path, _ in self._image_folder.samples]
+
     def __len__(self) -> int:
         return len(self._image_folder)
 

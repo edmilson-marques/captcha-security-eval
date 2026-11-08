@@ -162,8 +162,18 @@ def detect_stroke_regions(
     min_area: int = 150,
     max_area_ratio: float = 0.3,
     max_bbox_span_ratio: float = 0.8,
+    mask: np.ndarray | None = None,
 ) -> tuple[list[dict], np.ndarray]:
     """Detecta regiões de traço (ícones/curvas) via borda + fechamento morfológico.
+
+    `mask`: opcional, substitui `_stroke_edge_mask(image)` pela máscara
+    binária já pronta do chamador -- a filtragem por área/bbox abaixo é
+    reaproveitada como está. Usado por
+    `attacks.canvas_click_cnn.dataset_prep._closed_loop_mask` (segmentação
+    por borda no canal de saturação, não luminância -- ver sua docstring);
+    todo outro chamador existente (`solve_icon_outlier_classical`,
+    `solve_closed_loop_classical`, `classify_loop_closure`) continua usando
+    o default (`None`), comportamento inalterado.
 
     Descarta componentes menores que `min_area` (ruído residual) ou maiores
     que `max_area_ratio` da imagem inteira (textura de fundo conectada em
@@ -188,7 +198,8 @@ def detect_stroke_regions(
     máscara binária usada (precisa ser reaproveitada por
     `classify_loop_closure`, que opera sobre a mesma máscara).
     """
-    mask = _stroke_edge_mask(image)
+    if mask is None:
+        mask = _stroke_edge_mask(image)
     img_h, img_w = mask.shape
     total_area = img_h * img_w
 
@@ -287,20 +298,41 @@ def surrounding_background_color(
     return (float(mean[0]), float(mean[1]), float(mean[2]))
 
 
+def _bgr_to_lab(color: tuple[float, float, float]) -> tuple[float, float, float]:
+    """Converte uma cor BGR (0-255 por canal) para CIELAB (L em [0,100], a/b
+    aproximadamente em [-128,127]).
+
+    Usa `cv2.cvtColor` sobre uma imagem 1x1 em ponto flutuante normalizada
+    (`/255.0`) em vez da entrada `uint8` padrão do OpenCV — com `uint8`, o
+    próprio OpenCV reescala L para [0,255] e desloca a/b em +128 para caber
+    em um byte, o que exigiria desfazer essa rescala manualmente para obter
+    unidades de Delta-E corretas. Com `float32` normalizado, o retorno já
+    vem nas unidades padrão de CIELAB, sem conversão adicional.
+    """
+    pixel = np.array([[color]], dtype=np.float32) / 255.0
+    lab = cv2.cvtColor(pixel, cv2.COLOR_BGR2LAB)
+    l_value, a_value, b_value = lab[0, 0]
+    return float(l_value), float(a_value), float(b_value)
+
+
 def color_contrast(
     color_a: tuple[float, float, float], color_b: tuple[float, float, float]
 ) -> float:
-    """Distância de cor perceptual aproximada entre duas cores BGR (formato OpenCV).
+    """Distância de cor perceptual (Delta-E, CIE76) entre duas cores BGR (formato OpenCV).
 
-    Usa a fórmula "redmean" (aproximação de baixo custo, sem precisar
-    converter pra Lab/CIEDE2000): pondera o canal verde mais que os outros
-    dois, com um peso que varia conforme o nível médio de vermelho. Boa o
-    bastante para comparar contraste *relativo* entre candidatos (qual
-    contrasta mais com o fundo ao redor), não para medir diferença de cor
-    com precisão absoluta.
+    Converte as duas cores para CIELAB (`_bgr_to_lab`) e retorna a distância
+    euclidiana nesse espaço — a definição clássica de Delta-E (CIE76).
+    Substitui a aproximação "redmean" usada até 2026-11-02 (mesma
+    assinatura e mesma interpretação: quanto maior o valor, mais as duas
+    cores contrastam perceptualmente), adotada após o resultado real de
+    0/271 do `solve_icon_outlier_classical` sugerir que uma métrica de
+    contraste mais fiel à percepção humana (ver trabalhos futuros na
+    monografia) poderia separar melhor o ícone-alvo do fundo decorativo.
+    Delta-E CIE76 foi escolhido em vez de CIEDE2000 (mais preciso, porém
+    bem mais caro de calcular) por ser suficiente para uma comparação
+    *relativa* entre candidatos, não uma medição absoluta de diferença de
+    cor.
     """
-    b1, g1, r1 = color_a
-    b2, g2, r2 = color_b
-    rmean = (r1 + r2) / 2
-    dr, dg, db = r1 - r2, g1 - g2, b1 - b2
-    return ((2 + rmean / 256) * dr**2 + 4 * dg**2 + (2 + (255 - rmean) / 256) * db**2) ** 0.5
+    l1, a1, b1 = _bgr_to_lab(color_a)
+    l2, a2, b2 = _bgr_to_lab(color_b)
+    return ((l1 - l2) ** 2 + (a1 - a2) ** 2 + (b1 - b2) ** 2) ** 0.5

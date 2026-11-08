@@ -40,9 +40,20 @@ targets:
       pipeline/código (não para medir robustez), as sitekeys de teste
       documentadas em developers.cloudflare.com/turnstile/troubleshooting/testing/.
     sitekeys_de_teste_cloudflare:
-      sempre_passa: "1x00000000000000000000AA"
-      sempre_bloqueia: "2x00000000000000000000AB"
-      sempre_forca_desafio_interativo: "3x00000000000000000000FF"
+      # As 5 sitekeys abaixo são as 5 documentadas pela própria Cloudflare em
+      # developers.cloudflare.com/turnstile/troubleshooting/testing/ (conferido
+      # ao vivo em 2026-11-04, página datada "Last updated Oct 20, 2026") — não
+      # são as 3 únicas, só as 3 primeiras que o projeto conhecia até então.
+      # As duas "invisivel_*" foram validadas ao vivo agora e funcionam com a
+      # mesma `turnstile_behavioral_attempt` já existente, sem nenhuma mudança
+      # de código (a função já aceita qualquer sitekey por parâmetro) — e são
+      # mais relevantes pro estudo que as visíveis, já que o Turnstile real é
+      # "majoritariamente comportamental/invisível" (ver `tipo_desafio` acima).
+      sempre_passa: "1x00000000000000000000AA"  # widget visível
+      sempre_bloqueia: "2x00000000000000000000AB"  # widget visível
+      sempre_forca_desafio_interativo: "3x00000000000000000000FF"  # widget visível
+      invisivel_sempre_passa: "1x00000000000000000000BB"  # widget invisível
+      invisivel_sempre_bloqueia: "2x00000000000000000000BB"  # widget invisível
 
 selenium:
   headless: true
